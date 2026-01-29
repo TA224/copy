@@ -21,117 +21,285 @@ class BackgroundDateParser {
     }
 
     parseDate(text) {
-        console.log('🔍 Parsing text for dates...');
+        console.log('🔍 Parsing text:', text.substring(0, 100));
         
         const patterns = [
-            // Format: "Homework due January 15, 2024 at 11:59 PM"
+            // ====== PATTERN 1: Natural language with "due/deadline" ======
+            // "Assignment due January 15, 2024 at 11:59 PM"
+            // "Homework due Jan 15"
+            // "Project deadline Feb 28th 2024"
             {
-                regex: /(\b\w+\b.*?)\b(due|exam|deadline|submission|test|quiz|midterm|final)\b.*?\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)(?:\.?)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})(?:\s+at\s+(\d{1,2}):(\d{2})\s*(am|pm|a\.m\.|p\.m\.))?/gi,
+                regex: /(\b[\w\s#&-]+\b)\s+(due|deadline|by|submit|submission|exam|test|quiz|assignment|homework|project|midterm|final)\s+(?:on\s+)?(?:by\s+)?(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,\s*)?(?:\s+(\d{4}))?(?:\s+(?:at|@)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?)?/gi,
                 handler: (match) => {
                     const [_, title, type, monthStr, day, year, hour, minute, ampm] = match;
                     const month = this.monthMap[monthStr.toLowerCase()];
-                    let hourNum = 23, minuteNum = 59; // Default to end of day
+                    const currentYear = new Date().getFullYear();
                     
-                    if (hour && minute && ampm) {
+                    // Determine year
+                    let eventYear = year ? parseInt(year) : currentYear;
+                    
+                    // Determine time
+                    let hourNum = 23, minuteNum = 59; // Default to end of day
+                    if (hour) {
                         hourNum = parseInt(hour);
-                        minuteNum = parseInt(minute);
-                        if (ampm.toLowerCase().includes('pm') && hourNum < 12) hourNum += 12;
-                        if (ampm.toLowerCase().includes('am') && hourNum === 12) hourNum = 0;
+                        minuteNum = minute ? parseInt(minute) : 0;
+                        
+                        if (ampm) {
+                            const ampmLower = ampm.toLowerCase();
+                            if (ampmLower.includes('pm') && hourNum < 12) hourNum += 12;
+                            if (ampmLower.includes('am') && hourNum === 12) hourNum = 0;
+                        } else if (hourNum < 12) {
+                            // Assume PM if no am/pm and hour is < 12 (common for deadlines)
+                            hourNum += 12;
+                        }
+                    }
+                    
+                    const date = new Date(eventYear, month, parseInt(day), hourNum, minuteNum);
+                    
+                    // Adjust year if date is in the past
+                    if (date < new Date()) {
+                        date.setFullYear(date.getFullYear() + 1);
                     }
                     
                     return {
-                        title: title.trim() + ' ' + type,
-                        date: new Date(year, month, parseInt(day), hourNum, minuteNum)
+                        title: `${title.trim()} ${type}`,
+                        date: date
                     };
                 }
             },
-            // Format: "Midterm Exam: February 20, 2024"
+            
+            // ====== PATTERN 2: Title with colon format ======
+            // "Midterm Exam: February 20, 2024"
+            // "Quiz 3: Jan 15"
+            // "Final Project: March 30th"
             {
-                regex: /([^:]+):\s*(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|jun|jul|aug|sep|oct|nov|dec)(?:\.?)\s+(\d{1,2})(?:st|nd|rd|th)?,?\s+(\d{4})/gi,
+                regex: /([^:\n]+):\s*(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,\s*)?(?:\s+(\d{4}))?(?:\s+(?:at|@)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?)?/gi,
                 handler: (match) => {
-                    const [_, title, monthStr, day, year] = match;
+                    const [_, title, monthStr, day, year, hour, minute, ampm] = match;
                     const month = this.monthMap[monthStr.toLowerCase()];
-                    return {
-                        title: title.trim(),
-                        date: new Date(year, month, parseInt(day), 23, 59)
-                    };
-                }
-            },
-            // Format: "Assignment 3 due 03/30/2024"
-            {
-                regex: /(\b\w+\b.*?)\b(due|deadline|by)\s+(\d{1,2})[\/\-](\d{1,2})[\/\-](\d{4})(?:\s+at\s+(\d{1,2}):(\d{2})\s*(am|pm|a\.m\.|p\.m\.))?/gi,
-                handler: (match) => {
-                    const [_, title, type, month, day, year, hour, minute, ampm] = match;
+                    const currentYear = new Date().getFullYear();
+                    
+                    let eventYear = year ? parseInt(year) : currentYear;
                     let hourNum = 23, minuteNum = 59;
                     
-                    if (hour && minute && ampm) {
+                    if (hour) {
                         hourNum = parseInt(hour);
-                        minuteNum = parseInt(minute);
-                        if (ampm.toLowerCase().includes('pm') && hourNum < 12) hourNum += 12;
-                        if (ampm.toLowerCase().includes('am') && hourNum === 12) hourNum = 0;
+                        minuteNum = minute ? parseInt(minute) : 0;
+                        
+                        if (ampm) {
+                            const ampmLower = ampm.toLowerCase();
+                            if (ampmLower.includes('pm') && hourNum < 12) hourNum += 12;
+                            if (ampmLower.includes('am') && hourNum === 12) hourNum = 0;
+                        }
                     }
                     
-                    // Handle both US (MM/DD) and international (DD/MM) formats
-                    let monthNum, dayNum;
-                    if (parseInt(month) > 12) {
-                        // DD/MM format
-                        dayNum = parseInt(month);
-                        monthNum = parseInt(day) - 1;
-                    } else {
-                        // MM/DD format
-                        monthNum = parseInt(month) - 1;
-                        dayNum = parseInt(day);
+                    const date = new Date(eventYear, month, parseInt(day), hourNum, minuteNum);
+                    
+                    if (date < new Date()) {
+                        date.setFullYear(date.getFullYear() + 1);
                     }
                     
                     return {
-                        title: title.trim() + ' ' + type,
-                        date: new Date(year, monthNum, dayNum, hourNum, minuteNum)
+                        title: title.trim(),
+                        date: date
                     };
                 }
             },
-            // Format with year first: "2024-03-30"
+            
+            // ====== PATTERN 3: Standalone dates with context ======
+            // "Jan 30 - Drug Quiz #6"
+            // "February 15: Assignment 3"
+            // "March 20th - Final Exam"
             {
-                regex: /(\b\w+\b.*?)\b(due|deadline|by)\s+(\d{4})[\/\-](\d{1,2})[\/\-](\d{1,2})/gi,
+                regex: /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s*,\s*)?(?:\s+(\d{4}))?(?:\s*[-:]\s*)(.+)/gi,
+                handler: (match) => {
+                    const [_, monthStr, day, year, title] = match;
+                    const month = this.monthMap[monthStr.toLowerCase()];
+                    const currentYear = new Date().getFullYear();
+                    
+                    let eventYear = year ? parseInt(year) : currentYear;
+                    const date = new Date(eventYear, month, parseInt(day), 23, 59);
+                    
+                    if (date < new Date()) {
+                        date.setFullYear(date.getFullYear() + 1);
+                    }
+                    
+                    // Determine event type from title
+                    let type = 'assignment';
+                    const lowerTitle = title.toLowerCase();
+                    if (lowerTitle.includes('quiz')) type = 'quiz';
+                    if (lowerTitle.includes('test')) type = 'test';
+                    if (lowerTitle.includes('exam')) type = 'exam';
+                    if (lowerTitle.includes('homework')) type = 'homework';
+                    if (lowerTitle.includes('project')) type = 'project';
+                    if (lowerTitle.includes('midterm')) type = 'midterm';
+                    if (lowerTitle.includes('final')) type = 'final';
+                    
+                    return {
+                        title: `${title.trim()} ${type}`,
+                        date: date
+                    };
+                }
+            },
+            
+            // ====== PATTERN 4: Numeric dates (MM/DD/YYYY or DD/MM/YYYY) ======
+            // "Due 01/15/2024"
+            // "Assignment by 15/01/2024"
+            // "Submit by 3/30/24"
+            {
+                regex: /(\b[\w\s#&-]+\b)\s+(due|deadline|by|submit|submission)\s+(\d{1,2})[\/\-\.](\d{1,2})[\/\-\.](\d{2,4})(?:\s+(?:at|@)\s+(\d{1,2})(?::(\d{2}))?\s*(am|pm|a\.m\.|p\.m\.)?)?/gi,
+                handler: (match) => {
+                    const [_, title, type, part1, part2, year, hour, minute, ampm] = match;
+                    
+                    // Parse year (handle 2-digit years)
+                    let eventYear = parseInt(year);
+                    if (year.length === 2) {
+                        eventYear = 2000 + eventYear;
+                    }
+                    
+                    // Determine if part1 is month or day
+                    let monthNum, dayNum;
+                    const num1 = parseInt(part1);
+                    const num2 = parseInt(part2);
+                    
+                    if (num1 > 12 && num2 <= 12) {
+                        // DD/MM format (15/01/2024)
+                        dayNum = num1;
+                        monthNum = num2 - 1;
+                    } else if (num2 > 12 && num1 <= 12) {
+                        // MM/DD format (01/15/2024)
+                        monthNum = num1 - 1;
+                        dayNum = num2;
+                    } else {
+                        // Ambiguous, assume MM/DD (US format)
+                        monthNum = Math.min(num1, num2) - 1;
+                        dayNum = Math.max(num1, num2);
+                    }
+                    
+                    // Determine time
+                    let hourNum = 23, minuteNum = 59;
+                    if (hour) {
+                        hourNum = parseInt(hour);
+                        minuteNum = minute ? parseInt(minute) : 0;
+                        
+                        if (ampm) {
+                            const ampmLower = ampm.toLowerCase();
+                            if (ampmLower.includes('pm') && hourNum < 12) hourNum += 12;
+                            if (ampmLower.includes('am') && hourNum === 12) hourNum = 0;
+                        }
+                    }
+                    
+                    const date = new Date(eventYear, monthNum, dayNum, hourNum, minuteNum);
+                    
+                    if (date < new Date()) {
+                        date.setFullYear(date.getFullYear() + 1);
+                    }
+                    
+                    return {
+                        title: `${title.trim()} ${type}`,
+                        date: date
+                    };
+                }
+            },
+            
+            // ====== PATTERN 5: ISO dates (YYYY-MM-DD) ======
+            // "Due 2024-03-30"
+            // "Submission: 2024-12-15"
+            {
+                regex: /(\b[\w\s#&-]+\b)\s+(due|deadline|by|submit|submission|:)\s+(\d{4})[\/\-\.](\d{1,2})[\/\-\.](\d{1,2})/gi,
                 handler: (match) => {
                     const [_, title, type, year, month, day] = match;
+                    const date = new Date(year, parseInt(month) - 1, parseInt(day), 23, 59);
+                    
+                    if (date < new Date()) {
+                        date.setFullYear(date.getFullYear() + 1);
+                    }
+                    
                     return {
-                        title: title.trim() + ' ' + type,
-                        date: new Date(year, parseInt(month) - 1, parseInt(day), 23, 59)
+                        title: type === ':' ? title.trim() : `${title.trim()} ${type}`,
+                        date: date
+                    };
+                }
+            },
+            
+            // ====== PATTERN 6: Relative dates ======
+            // "Next Monday"
+            // "Due next week"
+            {
+                regex: /(\b[\w\s#&-]+\b)\s+(due|deadline|by)\s+(next|this)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday|week|month)/gi,
+                handler: (match) => {
+                    const [_, title, type, nextThis, dayOrPeriod] = match;
+                    const today = new Date();
+                    let targetDate = new Date(today);
+                    
+                    if (dayOrPeriod === 'week') {
+                        targetDate.setDate(today.getDate() + 7);
+                    } else if (dayOrPeriod === 'month') {
+                        targetDate.setMonth(today.getMonth() + 1);
+                    } else {
+                        // Day of week
+                        const dayMap = {
+                            'sunday': 0, 'monday': 1, 'tuesday': 2, 'wednesday': 3,
+                            'thursday': 4, 'friday': 5, 'saturday': 6
+                        };
+                        const targetDay = dayMap[dayOrPeriod.toLowerCase()];
+                        const currentDay = today.getDay();
+                        
+                        let daysToAdd = targetDay - currentDay;
+                        if (daysToAdd <= 0) daysToAdd += 7;
+                        if (nextThis.toLowerCase() === 'next') daysToAdd += 7;
+                        
+                        targetDate.setDate(today.getDate() + daysToAdd);
+                    }
+                    
+                    targetDate.setHours(23, 59, 0, 0);
+                    
+                    return {
+                        title: `${title.trim()} ${type}`,
+                        date: targetDate
                     };
                 }
             }
         ];
 
         const events = [];
+        const seen = new Set(); // For duplicate detection
         
         for (const pattern of patterns) {
             let match;
+            // Reset regex lastIndex
+            pattern.regex.lastIndex = 0;
+            
             while ((match = pattern.regex.exec(text)) !== null) {
                 try {
+                    console.log(`✅ Pattern matched: "${match[0]}"`);
+                    
                     const event = pattern.handler(match);
                     
-                    // Validate the date
                     if (event && event.date instanceof Date && !isNaN(event.date.getTime())) {
-                        // Remove duplicate events within this parsing session
-                        const isDuplicate = events.some(e => 
-                            e.title === event.title && 
-                            e.date.getTime() === event.date.getTime()
-                        );
+                        // Create unique key for duplicate detection
+                        const key = `${event.title}|${event.date.getTime()}`;
                         
-                        if (!isDuplicate) {
+                        if (!seen.has(key)) {
+                            seen.add(key);
                             events.push(event);
-                            console.log('✅ Parsed event:', event.title, event.date);
+                            console.log(`📅 Added: ${event.title} on ${event.date.toDateString()}`);
+                        } else {
+                            console.log(`↪️ Duplicate skipped: ${event.title}`);
                         }
                     } else {
-                        console.warn('❌ Invalid date for event:', event);
+                        console.warn(`❌ Invalid date for: "${match[0]}"`);
                     }
                 } catch (e) {
-                    console.warn('Failed to parse date:', match[0], e);
+                    console.warn(`⚠️ Parse error for "${match[0]}":`, e.message);
                 }
             }
         }
         
-        console.log(`📅 Total events parsed: ${events.length}`);
+        // Sort events by date
+        events.sort((a, b) => a.date - b.date);
+        
+        console.log(`📊 Total unique events parsed: ${events.length}`);
         return events;
     }
 }
