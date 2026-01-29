@@ -15,3 +15,8 @@
 # 4. Special handling for the icons folder
 !icons/
 !icons/icon128.png
+
+# 5. Ignore VS Code internal files and extension data
+.vscode/
+vscode/
+.qodo/
