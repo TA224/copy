@@ -102,7 +102,7 @@ function isSyllabusText(text) {
     return academicKeywords.some(keyword => lowerText.includes(keyword));
 }
 
-// ====== 5. VISUAL FEEDBACK ======...
+// ====== 5. VISUAL FEEDBACK ======
 function showVisualFeedback() {
     try {
          // Only show if we can access the DOM

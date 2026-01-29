@@ -644,7 +644,7 @@ document.addEventListener('DOMContentLoaded', () => {
     }
 });
 
-// Export for testing if needed
+// Export for testing if needed.
 if (typeof module !== 'undefined' && module.exports) {
     module.exports = { DateParser, ICSGenerator, SyllabusDateExtractor };
 }

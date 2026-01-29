@@ -20,7 +20,7 @@ class BackgroundDateParser {
         };
     }
 
-    parseDate(text) {
+    parseDate(text) { 
         console.log('🔍 Parsing text:', text.substring(0, 100));
         
         const patterns = [
