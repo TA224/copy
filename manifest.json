@@ -1,0 +1,45 @@
+{
+  "manifest_version": 3,
+  "name": "Syllabus Date Extractor",
+  "version": "1.0",
+  "permissions": [
+    "storage",
+    "activeTab",
+    "clipboardRead"
+  ],
+  "content_scripts": [
+    {
+      "matches": [
+        "<all_urls>",
+        "file:///*.pdf",
+        "file:///*.PDF"
+      ],
+      "js": ["content-script.js"],
+      "run_at": "document_end",
+      "all_frames": true
+    }
+  ],
+  "background": {
+    "service_worker": "background.js"
+  },
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "web_accessible_resources": [
+    {
+      "resources": ["content-script.js"],
+      "matches": [
+        "<all_urls>",
+        "file:///*",
+        "chrome://*"
+      ]
+    }
+  ],
+  "host_permissions": [
+    "<all_urls>",
+    "file:///*"
+  ],
+  "icons": {
+    "128": "icons/icon128.png"
+  }
+}

@@ -1,0 +1,32 @@
+<!DOCTYPE html>
+<html>
+<body>
+    <h1>Test Page</h1>
+    <p>Copy this text: Homework due January 25, 2024</p>
+    
+    <script>
+        // Check if content script loaded
+        console.log('Page loaded');
+        
+        // Manually test if content script would run
+        setTimeout(() => {
+            console.log('Testing content script injection...');
+            
+            // Check if extension is accessible
+            if (typeof chrome !== 'undefined' && chrome.runtime) {
+                console.log('Chrome APIs available, extension ID:', chrome.runtime.id);
+                
+                // Try to send a message
+                chrome.runtime.sendMessage({action: 'test'}, (response) => {
+                    console.log('Message test response:', response);
+                    if (chrome.runtime.lastError) {
+                        console.error('Error:', chrome.runtime.lastError.message);
+                    }
+                });
+            } else {
+                console.log('Chrome APIs NOT available');
+            }
+        }, 1000);
+    </script>
+</body>
+</html>
