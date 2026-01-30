@@ -24,6 +24,37 @@ class BackgroundDateParser {
         console.log('🔍 Parsing text:', text.substring(0, 100));
         
         const patterns = [
+            // CATCH-ALL PATTERN (add at the VERY beginning)
+            {
+                regex: /(.+?)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s+(\d{1,2})(?:st|nd|rd|th)?\b/gi,
+                handler: (match) => {
+                    const [_, title, monthStr, day] = match;
+                    const month = this.monthMap[monthStr.toLowerCase()];
+                    const currentYear = new Date().getFullYear();
+                    
+                    return {
+                        title: title.trim(),
+                        date: new Date(currentYear, month, parseInt(day), 23, 59)
+                    };
+                }
+            },
+            {
+                regex: /(\b.*?\b.*?\b.*?)\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s+(\d{1,2})(?:st|nd|rd|th)?\b/gi,
+                handler: (match) => {
+                    const [_, title, monthStr, day] = match;
+                    const month = this.monthMap[monthStr.toLowerCase()];
+                    const currentYear = new Date().getFullYear();
+                    
+                    // Clean up title
+                    let cleanTitle = title.trim();
+                    if (cleanTitle.length > 50) cleanTitle = cleanTitle.substring(0, 47) + '...';
+                    
+                    return {
+                        title: cleanTitle,
+                        date: new Date(currentYear, month, parseInt(day), 23, 59)
+                    };
+                }
+            },
             // ====== PATTERN 1: Natural language with "due/deadline" ======
             // "Assignment due January 15, 2024 at 11:59 PM"
             // "Homework due Jan 15"
@@ -355,6 +386,34 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
     return false;
 });
 
+// ====== PROCESS PENDING EVENTS FROM STORAGE ======
+async function processPendingEventsFromStorage() {
+    try {
+        // Get pending events that content scripts couldn't send
+        const pendingResult = await chrome.storage.local.get(['syllabusPendingEvents']);
+        const pendingEvents = pendingResult.syllabusPendingEvents || [];
+        
+        if (pendingEvents.length > 0) {
+            console.log(`📦 Processing ${pendingEvents.length} pending events from storage`);
+            
+            for (const event of pendingEvents) {
+                await processRequest({
+                    text: event.text,
+                    url: event.url,
+                    timestamp: event.timestamp,
+                    fromPending: true
+                });
+            }
+            
+            // Clear pending events
+            await chrome.storage.local.set({ syllabusPendingEvents: [] });
+            console.log('✅ All pending events processed from storage');
+        }
+    } catch (error) {
+        console.error('Error processing pending events from storage:', error);
+    }
+}
+
 // ====== PROCESS REQUEST ======
 async function processRequest(request) {
     try {
@@ -495,6 +554,9 @@ async function initialize() {
     
     // Clean up any old/invalid events
     await cleanupOldEvents();
+    
+    // Process any pending events
+    await processPendingEventsFromStorage();
     
     // Log startup info
     console.log('✅ Background script ready');

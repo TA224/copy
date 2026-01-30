@@ -1,9 +1,40 @@
-// content-script.js - UPDATED VERSION
+// content-script.js - FIXED VERSION
 console.log('✅ Syllabus Date Extractor content script loaded on:', window.location.href);
+
+// ====== 0. EXTENSION CONTEXT VALIDATION ======
+function isExtensionContextValid() {
+    try {
+        // Check if Chrome APIs are available
+        if (typeof chrome === 'undefined' || typeof chrome.runtime === 'undefined') {
+            return false;
+        }
+        
+        // Check if we have a valid extension ID
+        if (!chrome.runtime.id) {
+            return false;
+        }
+        
+        // Additional check - try to get manifest (will fail if context invalid)
+        if (chrome.runtime.getManifest) {
+            chrome.runtime.getManifest();
+        }
+        
+        return true;
+    } catch (error) {
+        // If any check fails, context is invalid
+        return false;
+    }
+}
 
 // ====== 1. BASIC COPY DETECTION ======
 function setupCopyDetection() {
     console.log('Setting up copy detection...');
+    
+    // Check if extension context is valid before setting up listeners
+    if (!isExtensionContextValid()) {
+        console.log('⚠️ Extension context not valid, skipping copy detection setup');
+        return;
+    }
     
     // Method 1: Standard copy event
     document.addEventListener('copy', handleCopyEvent);
@@ -44,29 +75,67 @@ function handleCopyEvent(e) {
 }
 
 // ====== 3. PROCESS TEXT ======
-function processCopiedText(text) {
-    // Check if extension context is still valid
-    if (!chrome.runtime?.id) {
-        console.log('⚠️ Extension context invalid, skipping...');
+async function processCopiedText(text) {
+    // Validate text first
+    if (!text || text.length < 20 || text.length > 2000) {
+        console.log('❌ Text length not suitable:', text.length);
         return;
     }
     
-    console.log('🚀 Sending to background:', text.substring(0, 50));
+    // Check if it's syllabus text
+    if (!isSyllabusText(text)) {
+        console.log('❌ Not syllabus text');
+        return;
+    }
     
+    console.log('🚀 Processing syllabus text:', text.substring(0, 50));
+    
+    // Check extension context
+    if (!isExtensionContextValid()) {
+        console.log('⚠️ Extension context invalid, cannot send to background');
+        
+        // Store in localStorage as fallback
+        try {
+            const pendingEvents = JSON.parse(localStorage.getItem('syllabusPendingEvents') || '[]');
+            pendingEvents.push({
+                text: text,
+                url: window.location.href,
+                timestamp: Date.now()
+            });
+            localStorage.setItem('syllabusPendingEvents', JSON.stringify(pendingEvents));
+            console.log('📦 Stored in localStorage for later processing');
+            
+            // Show message to user
+            showVisualFeedback('⚠️ Extension reloaded - please refresh page');
+        } catch (e) {
+            console.log('❌ Could not store in localStorage:', e.message);
+        }
+        
+        return;
+    }
+    
+    // Send to background with error handling
     try {
-        chrome.runtime.sendMessage({
-            action: 'processCopiedText',
-            text: text,
-            url: window.location.href,
-            timestamp: Date.now()
-        }, (response) => {
-            if (chrome.runtime.lastError) {
-                console.log('📩 Send error (normal during reload):', chrome.runtime.lastError.message);
-            } else {
-                console.log('✅ Successfully sent to background');
-                showVisualFeedback();
-            }
+        const response = await new Promise((resolve) => {
+            chrome.runtime.sendMessage({
+                action: 'processCopiedText',
+                text: text,
+                url: window.location.href,
+                timestamp: Date.now()
+            }, (response) => {
+                if (chrome.runtime.lastError) {
+                    console.log('📩 Send error:', chrome.runtime.lastError.message);
+                    resolve(null);
+                } else {
+                    resolve(response);
+                }
+            });
         });
+        
+        if (response) {
+            console.log('✅ Successfully sent to background');
+            showVisualFeedback('Date captured!');
+        }
     } catch (error) {
         console.log('❌ Error sending message:', error.message);
     }
@@ -96,16 +165,16 @@ function isSyllabusText(text) {
         'quiz', 'test', 'exam', 'assignment', 'homework', 'project',
         'due', 'deadline', 'midterm', 'final', 'submission',
         'paper', 'essay', 'lab', 'report', 'presentation',
-        'drug', 'pharmacy', 'safety', 'course', 'lecture'  // Add course-specific terms
+        'drug', 'pharmacy', 'safety', 'course', 'lecture'
     ];
     
     return academicKeywords.some(keyword => lowerText.includes(keyword));
 }
 
 // ====== 5. VISUAL FEEDBACK ======
-function showVisualFeedback() {
+function showVisualFeedback(message = 'Date captured!') {
     try {
-         // Only show if we can access the DOM
+        // Only show if we can access the DOM
         if (!document || !document.body) return;
 
         // Remove any existing feedback
@@ -134,8 +203,8 @@ function showVisualFeedback() {
                 gap: 8px;
                 border: 2px solid white;
             ">
-                <span style="font-size: 18px;">✅</span>
-                Date Captured!
+                <span style="font-size: 18px;">${message.includes('⚠️') ? '⚠️' : '✅'}</span>
+                ${message}
             </div>
         `;
         
@@ -189,49 +258,139 @@ function addTestButton() {
         box-shadow: 0 2px 10px rgba(0,0,0,0.2);
     `;
     
-    btn.onclick = () => {
+    btn.onclick = async () => {
         const testText = "Quiz 3 due February 15, 2024 at 3:00 PM";
         console.log('Test button clicked, text:', testText);
         
-        // Simulate copy by sending directly to background
-        chrome.runtime.sendMessage({
-            action: 'processCopiedText',
-            text: testText,
-            url: window.location.href,
-            timestamp: Date.now()
-        }, (response) => {
-            if (chrome.runtime.lastError) {
-                console.error('Test error:', chrome.runtime.lastError.message);
-                alert('❌ Test failed: ' + chrome.runtime.lastError.message);
-            } else {
+        if (!isExtensionContextValid()) {
+            alert('⚠️ Extension context invalid. Please refresh the page.');
+            return;
+        }
+        
+        try {
+            const response = await new Promise((resolve) => {
+                chrome.runtime.sendMessage({
+                    action: 'processCopiedText',
+                    text: testText,
+                    url: window.location.href,
+                    timestamp: Date.now()
+                }, (response) => {
+                    if (chrome.runtime.lastError) {
+                        console.error('Test error:', chrome.runtime.lastError.message);
+                        resolve({ error: chrome.runtime.lastError.message });
+                    } else {
+                        resolve(response);
+                    }
+                });
+            });
+            
+            if (response && !response.error) {
                 console.log('✅ Test successful!');
                 alert('✅ Test successful! Check extension popup for new event.');
-                showVisualFeedback();
+                showVisualFeedback('Test date captured!');
+            } else {
+                alert('❌ Test failed: ' + (response?.error || 'Unknown error'));
             }
-        });
+        } catch (error) {
+            console.error('Test error:', error);
+            alert('❌ Test error: ' + error.message);
+        }
     };
     
     document.body.appendChild(btn);
     console.log('Test button added');
 }
 
-// ====== 7. INITIALIZATION ======
-function initialize() {
-    console.log('Initializing content script...');
+// ====== 7. CHECK FOR PENDING EVENTS ======
+async function processPendingEvents() {
+    if (!isExtensionContextValid()) return;
     
-    // Wait for page to be fully interactive
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            setupCopyDetection();
-            addTestButton();
-        });
-    } else {
-        setupCopyDetection();
-        addTestButton();
+    try {
+        const pendingEvents = JSON.parse(localStorage.getItem('syllabusPendingEvents') || '[]');
+        if (pendingEvents.length === 0) return;
+        
+        console.log(`📦 Processing ${pendingEvents.length} pending events`);
+        
+        for (const event of pendingEvents) {
+            try {
+                await new Promise((resolve) => {
+                    chrome.runtime.sendMessage({
+                        action: 'processCopiedText',
+                        text: event.text,
+                        url: event.url,
+                        timestamp: event.timestamp,
+                        fromPending: true
+                    }, (response) => {
+                        if (chrome.runtime.lastError) {
+                            console.log('Pending event error:', chrome.runtime.lastError.message);
+                        } else {
+                            console.log('✅ Processed pending event');
+                        }
+                        resolve();
+                    });
+                });
+            } catch (e) {
+                console.log('Error processing pending event:', e.message);
+            }
+        }
+        
+        // Clear pending events
+        localStorage.removeItem('syllabusPendingEvents');
+        console.log('✅ All pending events processed');
+        
+    } catch (error) {
+        console.log('Error processing pending events:', error);
     }
-    
-    console.log('✅ Content script initialized');
 }
 
-// Start initialization
-initialize();
+// ====== 8. INITIALIZATION ======
+async function initialize() {
+    console.log('Initializing content script...');
+    
+    // Check extension context
+    if (!isExtensionContextValid()) {
+        console.log('⚠️ Extension context invalid on initialization');
+        console.log('This is normal if you just reloaded the extension.');
+        console.log('Please refresh this page (F5) to load the updated content script.');
+        
+        // Still add test button for manual testing
+        addTestButton();
+        showVisualFeedback('⚠️ Please refresh page (F5)');
+        return;
+    }
+    
+    // Extension context is valid
+    console.log('✅ Extension context is valid');
+    
+    // Process any pending events from previous session
+    await processPendingEvents();
+    
+    // Setup copy detection
+    setupCopyDetection();
+    
+    // Add test button
+    addTestButton();
+    
+    console.log('✅ Content script fully initialized');
+}
+
+// ====== 9. START ======
+// Initialize when page is ready
+if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', initialize);
+} else {
+    initialize();
+}
+
+// ====== 10. RELOAD DETECTION ======
+// Listen for extension reloads
+if (chrome.runtime && chrome.runtime.onMessage) {
+    chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
+        if (request.action === 'extensionReloaded') {
+            console.log('🔄 Extension was reloaded, refreshing content script...');
+            // Show notification to user
+            showVisualFeedback('🔄 Extension updated, please refresh page');
+        }
+        sendResponse({ received: true });
+    });
+}
