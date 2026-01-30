@@ -10,6 +10,8 @@
 !manifest.json
 !popup.html
 !popup.js
+!date-scanner.js
+!heatmap.js
 !test.html
 
 # 4. Special handling for the icons folder
