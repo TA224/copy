@@ -619,6 +619,88 @@ class SyllabusDateExtractor {
     }
 }
 
+function setupLMSControls() {
+    const extractBtn = document.getElementById('extractLMSBtn');
+    const viewBtn = document.getElementById('viewLMSDates');
+    const statusDiv = document.getElementById('lmsStatus');
+    
+    if (extractBtn) {
+        extractBtn.addEventListener('click', async () => {
+            extractBtn.disabled = true;
+            extractBtn.textContent = 'Extracting...';
+            
+            try {
+                const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+                
+                if (tab) {
+                    const response = await chrome.tabs.sendMessage(tab.id, {
+                        action: 'extractDates',
+                        source: 'lms'
+                    });
+                    
+                    if (response.success) {
+                        statusDiv.innerHTML = `<span style="color: #4CAF50;">✅ Found ${response.dates.length} dates</span>`;
+                        showToast(`Found ${response.dates.length} dates`);
+                        
+                        // Refresh events list
+                        await loadEvents();
+                        updateUI();
+                    } else {
+                        statusDiv.innerHTML = `<span style="color: #f44336;">❌ ${response.error || 'Extraction failed'}</span>`;
+                    }
+                }
+            } catch (error) {
+                statusDiv.innerHTML = `<span style="color: #f44336;">❌ Cannot access page</span>`;
+            } finally {
+                extractBtn.disabled = false;
+                extractBtn.textContent = 'Extract Dates from Current Page';
+            }
+        });
+    }
+    
+    if (viewBtn) {
+        viewBtn.addEventListener('click', async () => {
+            // This would show a modal with all dates
+            // You can implement this based on your existing UI
+            showToast('Viewing all extracted dates...');
+        });
+    }
+}
+
+async function checkPageType() {
+    try {
+        const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+        
+        if (tab) {
+            const response = await chrome.tabs.sendMessage(tab.id, {
+                action: 'getPageType'
+            });
+            
+            const statusDiv = document.getElementById('lmsStatus');
+            if (response) {
+                let message = '';
+                if (response.type === 'lms') {
+                    message = `<span style="color: #4CAF50;">✅ LMS page detected (${response.hasLMS ? 'Extractor ready' : 'No extractor'})</span>`;
+                } else if (response.type === 'pdf') {
+                    message = `<span style="color: #FF9800;">📄 PDF page detected</span>`;
+                } else {
+                    message = `<span style="color: #666;">🌐 Regular web page</span>`;
+                }
+                
+                if (statusDiv) {
+                    statusDiv.innerHTML = message;
+                }
+            }
+        }
+    } catch (error) {
+        // Tab not ready or content script not loaded
+        const statusDiv = document.getElementById('lmsStatus');
+        if (statusDiv) {
+            statusDiv.innerHTML = '<span style="color: #666;">Page not ready for extraction</span>';
+        }
+    }
+}
+
 // Initialize when DOM is loaded
 document.addEventListener('DOMContentLoaded', () => {
     console.log('DOM loaded, initializing SyllabusDateExtractor...');
@@ -642,6 +724,11 @@ document.addEventListener('DOMContentLoaded', () => {
             </div>
         `;
     }
+    // Add LMS controls
+    setupLMSControls();
+    
+    // Check current page type
+    checkPageType();
 });
 
 // Export for testing if needed.

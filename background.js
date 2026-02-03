@@ -380,11 +380,120 @@ chrome.runtime.onMessage.addListener((request, sender, sendResponse) => {
         sendResponse({ test: 'Background script is working' });
         return true;
     }
+
+    if (request.action === 'processExtractedDates') {
+        processLMSDates(request).then(sendResponse);
+        return true;
+    }
+    
+    if (request.action === 'addDateToCalendar') {
+        addDateToCalendar(request.date).then(sendResponse);
+        return true;
+    }
+    
+    if (request.action === 'exportDatesToCalendar') {
+        exportDatesToCalendar(request.dates).then(sendResponse);
+        return true;
+    }
+    
+    if (request.action === 'extractFromLMS') {
+        extractFromLMS(sender.tab.id).then(sendResponse);
+        return true;
+    }
     
     console.log('Unknown action:', request.action);
     sendResponse({ error: 'Unknown action' });
     return false;
 });
+
+async function processLMSDates(request) {
+    console.log('📊 Processing extracted dates from LMS:', request.dates.length);
+    
+    try {
+        // Get existing events
+        const result = await chrome.storage.local.get(['syllabusEvents']);
+        const existingEvents = result.syllabusEvents || [];
+        
+        // Filter out duplicates
+        const newEvents = request.dates.filter(newDate => {
+            const isDuplicate = existingEvents.some(existing => 
+                existing.title === newDate.title && 
+                existing.date === newDate.date
+            );
+            return !isDuplicate;
+        });
+        
+        if (newEvents.length === 0) {
+            console.log('All dates already in storage');
+            return { success: true, added: 0, total: existingEvents.length };
+        }
+        
+        // Add metadata
+        const eventsWithMetadata = newEvents.map(event => ({
+            ...event,
+            added: new Date().toISOString(),
+            autoCaptured: true,
+            sourceType: 'lms'
+        }));
+        
+        // Save to storage
+        const allEvents = [...existingEvents, ...eventsWithMetadata];
+        await chrome.storage.local.set({ syllabusEvents: allEvents });
+        
+        // Update badge
+        updateBadge(newEvents.length);
+        
+        console.log(`✅ Added ${newEvents.length} new dates from LMS`);
+        
+        return {
+            success: true,
+            added: newEvents.length,
+            total: allEvents.length
+        };
+        
+    } catch (error) {
+        console.error('Error processing LMS dates:', error);
+        return { success: false, error: error.message };
+    }
+}
+
+async function extractFromLMS(tabId) {
+    try {
+        const response = await chrome.tabs.sendMessage(tabId, {
+            action: 'extractDates',
+            source: 'lms'
+        });
+        
+        return response;
+    } catch (error) {
+        console.error('Failed to extract from LMS:', error);
+        return { success: false, error: 'Cannot extract from this page' };
+    }
+}
+
+async function addDateToCalendar(date) {
+    try {
+        // Convert to ICS event
+        const icsEvent = {
+            title: date.title,
+            start: date.date,
+            end: date.date,
+            description: `Source: ${date.source}\nContext: ${date.context || ''}`
+        };
+        
+        // You'd implement actual calendar export here
+        // For now, just save it
+        const result = await chrome.storage.local.get(['calendarEvents']);
+        const events = result.calendarEvents || [];
+        events.push(icsEvent);
+        await chrome.storage.local.set({ calendarEvents: events });
+        
+        return { success: true };
+    } catch (error) {
+        console.error('Failed to add date to calendar:', error);
+        return { success: false, error: error.message };
+    }
+}
 
 // ====== PROCESS PENDING EVENTS FROM STORAGE ======
 async function processPendingEventsFromStorage() {

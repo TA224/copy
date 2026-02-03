@@ -234,73 +234,6 @@ function showVisualFeedback(message = 'Date captured!') {
     }
 }
 
-// ====== 6. TEST BUTTON ======
-function addTestButton() {
-    // Check if button already exists
-    if (document.getElementById('syllabus-test-btn')) return;
-    
-    const btn = document.createElement('button');
-    btn.id = 'syllabus-test-btn';
-    btn.innerHTML = '📋 Test Copy';
-    btn.style.cssText = `
-        position: fixed;
-        bottom: 20px;
-        left: 20px;
-        background: #4CAF50;
-        color: white;
-        border: none;
-        padding: 10px 15px;
-        border-radius: 5px;
-        cursor: pointer;
-        z-index: 999998;
-        font-family: Arial, sans-serif;
-        font-size: 14px;
-        box-shadow: 0 2px 10px rgba(0,0,0,0.2);
-    `;
-    
-    btn.onclick = async () => {
-        const testText = "Quiz 3 due February 15, 2024 at 3:00 PM";
-        console.log('Test button clicked, text:', testText);
-        
-        if (!isExtensionContextValid()) {
-            alert('⚠️ Extension context invalid. Please refresh the page.');
-            return;
-        }
-        
-        try {
-            const response = await new Promise((resolve) => {
-                chrome.runtime.sendMessage({
-                    action: 'processCopiedText',
-                    text: testText,
-                    url: window.location.href,
-                    timestamp: Date.now()
-                }, (response) => {
-                    if (chrome.runtime.lastError) {
-                        console.error('Test error:', chrome.runtime.lastError.message);
-                        resolve({ error: chrome.runtime.lastError.message });
-                    } else {
-                        resolve(response);
-                    }
-                });
-            });
-            
-            if (response && !response.error) {
-                console.log('✅ Test successful!');
-                alert('✅ Test successful! Check extension popup for new event.');
-                showVisualFeedback('Test date captured!');
-            } else {
-                alert('❌ Test failed: ' + (response?.error || 'Unknown error'));
-            }
-        } catch (error) {
-            console.error('Test error:', error);
-            alert('❌ Test error: ' + error.message);
-        }
-    };
-    
-    document.body.appendChild(btn);
-    console.log('Test button added');
-}
-
 // ====== 7. CHECK FOR PENDING EVENTS ======
 async function processPendingEvents() {
     if (!isExtensionContextValid()) return;
@@ -353,8 +286,6 @@ async function initialize() {
         console.log('This is normal if you just reloaded the extension.');
         console.log('Please refresh this page (F5) to load the updated content script.');
         
-        // Still add test button for manual testing
-        addTestButton();
         showVisualFeedback('⚠️ Please refresh page (F5)');
         return;
     }
@@ -367,9 +298,6 @@ async function initialize() {
     
     // Setup copy detection
     setupCopyDetection();
-    
-    // Add test button
-    addTestButton();
     
     console.log('✅ Content script fully initialized');
 }

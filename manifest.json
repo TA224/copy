@@ -1,33 +1,66 @@
 {
   "manifest_version": 3,
-  "name": "Syllabus Date Extractor",
-  "version": "1.0",
+  "name": "Syllabus Date Extractor + LMS Support",
+  "version": "2.0",
+  "description": "Extract academic dates from syllabi, PDFs, and LMS platforms (D2L, Canvas, Blackboard)",
+  
   "permissions": [
-    "storage",
     "activeTab",
-    "clipboardRead"
+    "scripting",
+    "storage",
+    "clipboardRead",
+    "clipboardWrite",
+    "notifications"
   ],
-  "content_scripts": [
-    {
-      "matches": ["<all_urls>"],
-      "js": ["content-script.js", "date-scanner.js", "heatmap.js"],
-      "run_at": "document_end",
-      "all_frames": true
-    }
+  
+  "host_permissions": [
+    "<all_urls>"
   ],
+  
   "background": {
     "service_worker": "background.js"
   },
-  "action": {
-    "default_popup": "popup.html"
-  },
-  "web_accessible_resources": [
+  
+  "content_scripts": [
     {
-      "resources": ["content-script.js"],
-      "matches": ["<all_urls>"]
+      "matches": ["<all_urls>"],
+      "js": [
+        "date-scanner.js",
+        "lms-extractor.js",
+        "content-main.js"
+      ],
+      "run_at": "document_idle"
     }
   ],
-  "icons": {
-    "128": "icons/icon128.png"
-  }
+  
+  "action": {
+    "default_popup": "popup.html",
+    "default_icon": {
+      "128": "icons/icon128.png"
+    }
+  },
+  
+  "commands": {
+    "activate_date_lens": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+D",
+        "mac": "Command+Shift+D"
+      },
+      "description": "Find dates on current page"
+    },
+    "extract_lms_dates": {
+      "suggested_key": {
+        "default": "Ctrl+Shift+L",
+        "mac": "Command+Shift+L"
+      },
+      "description": "Extract dates from LMS (D2L/Canvas)"
+    }
+  },
+  
+  "web_accessible_resources": [
+    {
+      "resources": ["icons/*"],
+      "matches": ["<all_urls>"]
+    }
+  ]
 }
