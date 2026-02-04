@@ -27,7 +27,8 @@
       "js": [
         "date-scanner.js",
         "lms-extractor.js",
-        "content-main.js"
+        "content-main.js",
+        "pdf-highlighter.js"
       ],
       "run_at": "document_idle"
     }

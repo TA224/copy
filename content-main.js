@@ -7,10 +7,15 @@ class ContentOrchestrator {
             dateScanner: null,
             dateLens: null,
             lmsExtractor: null,
-            pdfExtractor: null
+            pdfExtractor: null,
+            pdfHighlighter: null
         };
         
         this.currentMode = 'auto'; // auto, pdf, lms, regular
+        // Add PDF highlighter if on PDF page
+        if (this.currentMode === 'pdf') {
+            this.initializePDFHighlighter();
+        }
         this.activeModule = null;
         
         this.init();
@@ -91,6 +96,25 @@ class ContentOrchestrator {
             
         } catch (error) {
             console.error('Error loading modules:', error);
+        }
+    }
+
+    async initializePDFHighlighter() {
+        try {
+            // Load PDF text highlighter
+            if (typeof PDFTextHighlighter !== 'undefined') {
+                this.modules.pdfHighlighter = new PDFTextHighlighter();
+                console.log('✅ PDF Text Highlighter loaded');
+                
+                // Auto-highlight after delay
+                setTimeout(() => {
+                    if (this.modules.pdfHighlighter) {
+                        this.modules.pdfHighlighter.activate();
+                    }
+                }, 3000);
+            }
+        } catch (error) {
+            console.error('Failed to load PDF highlighter:', error);
         }
     }
     
@@ -401,6 +425,13 @@ class ContentOrchestrator {
             if (e.ctrlKey && e.shiftKey && e.key === 'L') {
                 e.preventDefault();
                 this.manualExtractFromLMS();
+            }
+
+            if (e.ctrlKey && e.shiftKey && e.key === 'H' && !e.altKey) {
+                e.preventDefault();
+                if (this.modules.pdfHighlighter) {
+                    this.modules.pdfHighlighter.toggle();
+                }
             }
         });
     }

@@ -1,669 +1,848 @@
-// lms-extractor.js - EXTRACTS FROM ALL LMS PLATFORMS
-console.log('🎓 LMS Extractor loaded');
+// lms-pdf-extractor.js - Handles embedded PDFs in LMS
+console.log('📄 LMS PDF Extractor loaded');
 
-class LMSExtractor {
+class LMSPDFExtractor {
     constructor() {
-        this.lmsPatterns = {
-            // Brightspace/D2L
-            d2l: {
-                selectors: [
-                    '.d2l-htmlblock-untrusted',
-                    'd2l-html-block',
-                    '.d2l-richtext-editor',
-                    '[data-bsi-html-block]'
-                ],
-                shadowRoot: true,
-                attribute: 'html'
-            },
-            // Canvas
-            canvas: {
-                selectors: [
-                    '.user_content',
-                    '.discussion-entry',
-                    '.assignment-description',
-                    '.page-content'
-                ],
-                shadowRoot: false
-            },
-            // Blackboard
-            blackboard: {
-                selectors: [
-                    '.vtbegenerated',
-                    '.content',
-                    '.details'
-                ],
-                shadowRoot: false
-            },
-            // Moodle
-            moodle: {
-                selectors: [
-                    '.content',
-                    '.posting',
-                    '.forum-post'
-                ],
-                shadowRoot: false
-            },
-            // Generic
-            generic: {
-                selectors: [
-                    '[class*="content"]',
-                    '[class*="post"]',
-                    '[class*="assignment"]',
-                    '[class*="quiz"]',
-                    '[class*="exam"]',
-                    'article',
-                    'main',
-                    '.content-area'
-                ],
-                shadowRoot: false
-            }
-        };
+        this.extractedDates = new Set();
+        this.pdfIframes = new Set();
+        this.isActive = false;
         
-        this.datePatterns = this.getAcademicDatePatterns();
-    }
-    
-    // ====== MAIN EXTRACTION METHOD ======
-    async extractDatesFromPage() {
-        console.log('🔍 Extracting dates from LMS page...');
-        
-        // Try each LMS platform
-        const dates = [];
-        
-        for (const [platform, config] of Object.entries(this.lmsPatterns)) {
-            console.log(`Trying ${platform} extraction...`);
+        // Date patterns for academic content
+        this.datePatterns = [
+            // Month Day (January 15)
+            /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+\d{1,2}(?:st|nd|rd|th)?\b/gi,
             
-            const platformDates = await this.extractFromPlatform(platform, config);
-            dates.push(...platformDates);
+            // MM/DD/YYYY or DD/MM/YYYY
+            /\b(0?[1-9]|1[0-2])[\/\-\.](0?[1-9]|[12][0-9]|3[01])[\/\-\.](\d{4})\b/g,
             
-            if (platformDates.length > 0) {
-                console.log(`✅ Found ${platformDates.length} dates in ${platform}`);
-            }
-        }
-        
-        // Deduplicate
-        const uniqueDates = this.deduplicateDates(dates);
-        
-        console.log(`📊 Total unique dates found: ${uniqueDates.length}`);
-        return uniqueDates;
-    }
-    
-    async extractFromPlatform(platform, config) {
-        const dates = [];
-        
-        for (const selector of config.selectors) {
-            const elements = document.querySelectorAll(selector);
+            // MM/DD or DD/MM
+            /\b(0?[1-9]|1[0-2])[\/\-\.](0?[1-9]|[12][0-9]|3[01])\b/g,
             
-            for (const element of elements) {
-                try {
-                    const elementDates = await this.extractFromElement(element, config);
-                    dates.push(...elementDates);
-                } catch (error) {
-                    console.warn(`Error extracting from ${selector}:`, error);
-                }
-            }
-        }
-        
-        return dates;
-    }
-    
-    async extractFromElement(element, config) {
-        const dates = [];
-        
-        if (config.shadowRoot) {
-            // Handle shadow DOM elements
-            dates.push(...await this.extractFromShadowElement(element, config));
-        } else {
-            // Handle regular elements
-            dates.push(...this.extractFromRegularElement(element));
-        }
-        
-        return dates;
-    }
-    
-    // ====== SHADOW DOM EXTRACTION (for D2L) ======
-    async extractFromShadowElement(element, config) {
-        const dates = [];
-        
-        // Method 1: Try to get HTML from attribute
-        if (config.attribute && element.hasAttribute(config.attribute)) {
-            const html = element.getAttribute(config.attribute);
-            if (html) {
-                dates.push(...this.extractFromHTML(html, 'shadow-attribute'));
-            }
-        }
-        
-        // Method 2: Try to access shadow root
-        try {
-            const shadowRoot = element.shadowRoot || element.openOrClosedShadowRoot;
-            if (shadowRoot) {
-                dates.push(...this.extractFromShadowRoot(shadowRoot));
-            }
-        } catch (e) {
-            console.warn('Cannot access shadow root:', e);
-        }
-        
-        // Method 3: Try to get text from light DOM
-        dates.push(...this.extractFromRegularElement(element));
-        
-        return dates;
-    }
-    
-    extractFromShadowRoot(shadowRoot) {
-        const dates = [];
-        
-        // Get all text nodes in shadow root
-        const walker = document.createTreeWalker(
-            shadowRoot,
-            NodeFilter.SHOW_TEXT,
-            null,
-            false
-        );
-        
-        let node;
-        while ((node = walker.nextNode())) {
-            const text = node.textContent;
-            if (text.trim().length > 3) {
-                const foundDates = this.findDatesInText(text);
-                dates.push(...foundDates.map(date => ({
-                    ...date,
-                    source: 'shadow-dom',
-                    element: node.parentElement
-                })));
-            }
-        }
-        
-        // Also check for nested shadow roots
-        const nestedShadows = shadowRoot.querySelectorAll('*');
-        nestedShadows.forEach(child => {
-            if (child.shadowRoot) {
-                dates.push(...this.extractFromShadowRoot(child.shadowRoot));
-            }
-        });
-        
-        return dates;
-    }
-    
-    // ====== REGULAR ELEMENT EXTRACTION ======
-    extractFromRegularElement(element) {
-        const dates = [];
-        
-        // Get text content
-        const text = this.getElementText(element);
-        if (text && text.length > 10) {
-            const foundDates = this.findDatesInText(text);
-            dates.push(...foundDates.map(date => ({
-                ...date,
-                source: 'regular-dom',
-                element: element
-            })));
-        }
-        
-        return dates;
-    }
-    
-    getElementText(element) {
-        // Try multiple methods to get text
-        
-        // Method 1: textContent (fastest)
-        let text = element.textContent || '';
-        
-        // Method 2: innerText (preserves formatting)
-        if (!text || text.length < 10) {
-            text = element.innerText || '';
-        }
-        
-        // Method 3: Check data attributes
-        if (!text || text.length < 10) {
-            text = element.dataset.content || 
-                   element.dataset.text || 
-                   element.dataset.html || 
-                   '';
-        }
-        
-        // Clean the text
-        text = text.replace(/\s+/g, ' ').trim();
-        
-        return text;
-    }
-    
-    // ====== HTML EXTRACTION (for encoded HTML) ======
-    extractFromHTML(html, sourceType) {
-        const dates = [];
-        
-        // Decode HTML entities
-        const decodedHTML = this.decodeHTML(html);
-        
-        // Method 1: Parse as HTML
-        try {
-            const parser = new DOMParser();
-            const doc = parser.parseFromString(decodedHTML, 'text/html');
-            const text = doc.body.textContent || '';
+            // Academic deadlines
+            /(?:due\s*|deadline\s*|exam\s*|quiz\s*|test\s*|assignment\s*|homework\s*|project\s*|lab\s*|midterm\s*|final\s*|submission\s*)[:;\-\s]*(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+\d{1,2}(?:st|nd|rd|th)?/gi,
             
-            const foundDates = this.findDatesInText(text);
-            dates.push(...foundDates.map(date => ({
-                ...date,
-                source: sourceType + '-parsed',
-                context: text.substring(date.index, date.index + 100)
-            })));
-        } catch (e) {
-            console.warn('HTML parsing failed:', e);
-        }
-        
-        // Method 2: Direct text extraction (fallback)
-        const directDates = this.findDatesInText(decodedHTML);
-        dates.push(...directDates.map(date => ({
-            ...date,
-            source: sourceType + '-direct',
-            context: decodedHTML.substring(date.index, date.index + 100)
-        })));
-        
-        return dates;
-    }
-    
-    decodeHTML(html) {
-        const textarea = document.createElement('textarea');
-        textarea.innerHTML = html;
-        return textarea.value;
-    }
-    
-    // ====== DATE PATTERNS ======
-    getAcademicDatePatterns() {
-        return [
-            // Quiz/Exam patterns: "Drug Quiz #7 Feb 3rd"
-            {
-                regex: /(\bQuiz\s+#?\d+|\bExam\s+#?\d+|\bTest\s+#?\d+|\bAssignment\s+#?\d+|\bHomework\s+#?\d+|\bProject\s+#?\d+)\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+(\d{1,2})(?:st|nd|rd|th)?/gi,
-                handler: (match) => {
-                    return {
-                        title: match[1].trim(),
-                        month: match[2].toLowerCase(),
-                        day: parseInt(match[3]),
-                        type: 'assessment'
-                    };
-                }
-            },
-            // "LO3 Exam Feb 5th"
-            {
-                regex: /(\bLO\d+\s+Exam|\bMidterm\s+Exam|\bFinal\s+Exam|\bOpen\s+Book\s+#?\d+)\s+(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+(\d{1,2})(?:st|nd|rd|th)?/gi,
-                handler: (match) => ({
-                    title: match[1].trim(),
-                    month: match[2].toLowerCase(),
-                    day: parseInt(match[3]),
-                    type: 'exam'
-                })
-            },
-            // Generic dates in academic context
-            {
-                regex: /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+(\d{1,2})(?:st|nd|rd|th)?(?:\s+(?:due|deadline|exam|quiz|test|assignment|project|lab|homework))?/gi,
-                handler: (match) => ({
-                    title: 'Academic date',
-                    month: match[1].toLowerCase(),
-                    day: parseInt(match[2]),
-                    type: 'generic'
-                })
-            }
+            // Simple dates
+            /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s+\d{1,2}\b/gi
         ];
+        
+        this.init();
     }
     
-    findDatesInText(text) {
-        const dates = [];
+    init() {
+        console.log('📄 LMS PDF Extractor initializing...');
         
-        this.datePatterns.forEach(pattern => {
-            let match;
-            pattern.regex.lastIndex = 0;
-            
-            while ((match = pattern.regex.exec(text)) !== null) {
-                try {
-                    const dateInfo = pattern.handler(match);
-                    if (dateInfo) {
-                        dates.push({
-                            ...dateInfo,
-                            originalText: match[0],
-                            index: match.index,
-                            confidence: this.calculateConfidence(match[0], dateInfo.type)
-                        });
-                    }
-                } catch (e) {
-                    console.warn('Error parsing date:', e);
-                }
+        // Check if we're on an LMS with PDFs
+        this.detectLMSPDFs();
+        
+        // Setup observer for dynamic content
+        this.setupObserver();
+        
+        // Setup keyboard shortcut
+        this.setupShortcuts();
+        
+        // Auto-start on LMS pages
+        setTimeout(() => {
+            if (this.hasPDFs) {
+                console.log('📄 Found PDFs on LMS page, auto-activating...');
+                this.activate();
+            }
+        }, 2000);
+    }
+    
+    detectLMSPDFs() {
+        const url = window.location.href.toLowerCase();
+        this.isLMSPage = url.includes('brightspace') || 
+                         url.includes('d2l') || 
+                         url.includes('canvas') ||
+                         url.includes('blackboard') ||
+                         url.includes('moodle') ||
+                         document.querySelector('.d2l-htmlblock-untrusted, .user_content, .vtbegenerated');
+        
+        // Look for PDFs in various forms
+        this.findPDFElements();
+        
+        this.hasPDFs = this.pdfIframes.size > 0 || 
+                      document.querySelector('embed[type="application/pdf"]') ||
+                      document.querySelector('object[type="application/pdf"]');
+        
+        console.log('📄 LMS PDF Detection:', {
+            isLMSPage: this.isLMSPage,
+            pdfIframes: this.pdfIframes.size,
+            hasPDFs: this.hasPDFs
+        });
+    }
+    
+    findPDFElements() {
+        // Look for iframes that might contain PDFs
+        const iframes = document.querySelectorAll('iframe');
+        iframes.forEach(iframe => {
+            const src = iframe.src || '';
+            if (src.includes('.pdf') || 
+                src.includes('pdfjs') ||
+                src.includes('viewer') ||
+                iframe.title.toLowerCase().includes('pdf')) {
+                this.pdfIframes.add(iframe);
             }
         });
         
-        return dates;
+        // Look for PDF embeds
+        const embeds = document.querySelectorAll('embed[type="application/pdf"], object[type="application/pdf"]');
+        embeds.forEach(embed => this.pdfIframes.add(embed));
     }
     
-    calculateConfidence(text, type) {
-        let confidence = 0.5;
-        
-        // Boost for academic keywords
-        const academicWords = ['quiz', 'exam', 'assignment', 'due', 'deadline', 'test', 'project', 'homework', 'lab'];
-        const lowerText = text.toLowerCase();
-        
-        academicWords.forEach(word => {
-            if (lowerText.includes(word)) confidence += 0.1;
+    setupObserver() {
+        this.observer = new MutationObserver((mutations) => {
+            mutations.forEach((mutation) => {
+                if (mutation.addedNodes.length > 0) {
+                    this.findPDFElements();
+                    
+                    if (this.isActive && this.pdfIframes.size > 0) {
+                        setTimeout(() => this.scanAllPDFs(), 1000);
+                    }
+                }
+            });
         });
         
-        // Boost for specific types
-        if (type === 'exam' || type === 'assessment') confidence += 0.2;
-        
-        return Math.min(confidence, 1.0);
+        this.observer.observe(document.body, {
+            childList: true,
+            subtree: true
+        });
     }
     
-    // ====== DEDUPLICATION ======
-    deduplicateDates(dates) {
-        const seen = new Set();
-        const uniqueDates = [];
+    setupShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            if (e.ctrlKey && e.shiftKey && e.key === 'P') { // Ctrl+Shift+P for PDFs
+                e.preventDefault();
+                this.toggle();
+            }
+        });
+    }
+    
+    toggle() {
+        if (this.isActive) {
+            this.deactivate();
+        } else {
+            this.activate();
+        }
+    }
+    
+    activate() {
+        if (this.isActive) return;
         
-        dates.forEach(date => {
-            const key = `${date.title}|${date.month}|${date.day}`;
+        console.log('🎯 Activating LMS PDF extraction...');
+        this.isActive = true;
+        
+        // Scan immediately
+        this.scanAllPDFs();
+        
+        this.showNotification('📄 Scanning PDFs for dates...', '#4CAF50');
+    }
+    
+    deactivate() {
+        if (!this.isActive) return;
+        
+        console.log('🔴 Deactivating LMS PDF extraction...');
+        this.isActive = false;
+        
+        this.showNotification('📄 PDF scanning OFF', '#666');
+    }
+    
+    async scanAllPDFs() {
+        if (!this.isActive) return;
+        
+        console.log(`🔍 Scanning ${this.pdfIframes.size} PDF element(s)...`);
+        let totalDates = 0;
+        
+        // Strategy 1: Try to access iframe content
+        for (const element of this.pdfIframes) {
+            if (element.tagName === 'IFRAME') {
+                totalDates += await this.scanIframePDF(element);
+            } else if (element.tagName === 'EMBED' || element.tagName === 'OBJECT') {
+                totalDates += await this.scanEmbeddedPDF(element);
+            }
+        }
+        
+        // Strategy 2: Look for PDF.js viewers
+        totalDates += this.scanPDFjsViewers();
+        
+        // Strategy 3: Look for text that might be from a PDF
+        totalDates += this.scanTextContent();
+        
+        if (totalDates > 0) {
+            console.log(`✅ Found ${totalDates} date(s) in PDFs`);
+            this.showNotification(`📅 Found ${totalDates} date(s) in PDFs`, '#4CAF50');
+            this.shareWithMainExtractor();
+        }
+        
+        return totalDates;
+    }
+    
+    async scanIframePDF(iframe) {
+        let datesFound = 0;
+        
+        try {
+            // Try to access iframe document
+            const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+            if (!iframeDoc) {
+                console.log('Cannot access iframe document (CORS)');
+                return 0;
+            }
             
-            if (!seen.has(key) && date.confidence > 0.3) {
-                seen.add(key);
+            // Check for PDF.js viewer
+            const isPDFjs = iframeDoc.querySelector('.textLayer, .pdfViewer');
+            
+            if (isPDFjs) {
+                // PDF.js viewer - extract text from text layer
+                datesFound += this.extractFromPDFjsViewer(iframeDoc);
+            } else {
+                // Regular iframe - extract all text
+                datesFound += this.extractAllText(iframeDoc.body);
+            }
+            
+        } catch (error) {
+            console.log('Error accessing iframe:', error.message);
+            
+            // Alternative: Try to get text via OCR/rendering simulation
+            datesFound += this.simulateTextExtraction(iframe);
+        }
+        
+        return datesFound;
+    }
+    
+    async scanEmbeddedPDF(embed) {
+        try {
+            const doc = embed.contentDocument || embed.contentWindow?.document;
+            if (doc) {
+                return this.extractAllText(doc.body);
+            }
+        } catch (error) {
+            console.log('Cannot access embedded PDF:', error.message);
+        }
+        return 0;
+    }
+    
+    scanPDFjsViewers() {
+        let datesFound = 0;
+        
+        // Look for PDF.js viewers in main document
+        const textLayers = document.querySelectorAll('.textLayer, .text-layer');
+        textLayers.forEach(layer => {
+            const text = layer.textContent || '';
+            const dates = this.extractDates(text);
+            datesFound += dates.length;
+            
+            // Highlight dates if we can
+            if (dates.length > 0) {
+                this.highlightDatesInElement(layer, dates);
+            }
+        });
+        
+        return datesFound;
+    }
+    
+    scanTextContent() {
+        let datesFound = 0;
+        
+        // Look for large text blocks that might be PDF content
+        const selectors = [
+            '.d2l-htmlblock-untrusted',
+            '.user_content',
+            '.vtbegenerated',
+            '[class*="content"]',
+            '[class*="document"]',
+            'article',
+            'section'
+        ];
+        
+        selectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                const text = element.textContent || '';
+                if (text.length > 500) { // Likely a document
+                    const dates = this.extractDates(text);
+                    datesFound += dates.length;
+                    
+                    if (dates.length > 0) {
+                        console.log(`Found ${dates.length} dates in ${selector}`);
+                        this.highlightDatesInElement(element, dates);
+                    }
+                }
+            });
+        });
+        
+        return datesFound;
+    }
+    
+    extractFromPDFjsViewer(doc) {
+        let datesFound = 0;
+        
+        // PDF.js stores text in spans within .textLayer
+        const textSpans = doc.querySelectorAll('.textLayer span, .text-layer span');
+        textSpans.forEach(span => {
+            const text = span.textContent || '';
+            const dates = this.extractDates(text);
+            datesFound += dates.length;
+            
+            if (dates.length > 0) {
+                this.highlightTextNode(span, dates);
+            }
+        });
+        
+        return datesFound;
+    }
+    
+    extractAllText(element) {
+        const text = element.textContent || '';
+        const dates = this.extractDates(text);
+        
+        if (dates.length > 0) {
+            console.log(`Found ${dates.length} dates in PDF content`);
+            this.highlightDatesInElement(element, dates);
+        }
+        
+        return dates.length;
+    }
+    
+    simulateTextExtraction(iframe) {
+        // Try to extract text by simulating user interaction
+        let datesFound = 0;
+        
+        // Method 1: Try to get text via canvas (for rendered PDFs)
+        const canvases = iframe.contentDocument?.querySelectorAll('canvas');
+        if (canvases && canvases.length > 0) {
+            console.log('PDF appears to be canvas-rendered, trying alternative extraction');
+            
+            // Look for text overlay
+            const parent = iframe.parentElement;
+            const textOverlay = parent?.querySelector('.textLayer, .text-layer');
+            if (textOverlay) {
+                datesFound += this.extractAllText(textOverlay);
+            }
+        }
+        
+        return datesFound;
+    }
+    
+    extractDates(text) {
+        const dates = [];
+        
+        this.datePatterns.forEach((pattern, index) => {
+            pattern.lastIndex = 0;
+            let match;
+            
+            while ((match = pattern.exec(text)) !== null) {
+                const dateText = match[0].trim();
                 
-                // Convert to proper Date object
-                const fullDate = this.createDateObject(date);
-                if (fullDate) {
-                    uniqueDates.push({
-                        ...date,
-                        date: fullDate,
-                        formatted: fullDate.toLocaleDateString('en-US', {
-                            weekday: 'short',
-                            year: 'numeric',
-                            month: 'short',
-                            day: 'numeric'
-                        })
+                // Skip false positives
+                if (this.isFalsePositive(dateText)) continue;
+                
+                // Skip duplicates
+                const isDuplicate = dates.some(d => 
+                    d.text === dateText && Math.abs(d.index - match.index) < 5
+                );
+                
+                if (!isDuplicate) {
+                    dates.push({
+                        text: dateText,
+                        index: match.index,
+                        pattern: index
                     });
                 }
             }
         });
         
-        return uniqueDates;
-    }
-    
-    createDateObject(dateInfo) {
-        const monthMap = {
-            'january': 0, 'jan': 0, 'jan.': 0,
-            'february': 1, 'feb': 1, 'feb.': 1,
-            'march': 2, 'mar': 2, 'mar.': 2,
-            'april': 3, 'apr': 3, 'apr.': 3,
-            'may': 4, 'may.': 4,
-            'june': 5, 'jun': 5, 'jun.': 5,
-            'july': 6, 'jul': 6, 'jul.': 6,
-            'august': 7, 'aug': 7, 'aug.': 7,
-            'september': 8, 'sep': 8, 'sep.': 8, 'sept': 8, 'sept.': 8,
-            'october': 9, 'oct': 9, 'oct.': 9,
-            'november': 10, 'nov': 10, 'nov.': 10,
-            'december': 11, 'dec': 11, 'dec.': 11
-        };
-        
-        const monthNum = monthMap[dateInfo.month];
-        if (monthNum === undefined) return null;
-        
-        const currentYear = new Date().getFullYear();
-        return new Date(currentYear, monthNum, dateInfo.day, 23, 59, 0);
-    }
-    
-    // ====== PUBLIC API ======
-    async extract() {
-        return await this.extractDatesFromPage();
-    }
-    
-    async extractFromSelector(selector) {
-        const dates = [];
-        const elements = document.querySelectorAll(selector);
-        
-        for (const element of elements) {
-            const elementDates = await this.extractFromElement(element, {
-                shadowRoot: element.tagName.includes('-'), // Assume custom elements have shadow DOM
-                attribute: 'html'
-            });
-            dates.push(...elementDates);
-        }
-        
-        return this.deduplicateDates(dates);
-    }
-}
-
-// ====== BRIGHTSPACE/D2L SPECIFIC EXTRACTOR ======
-class D2LExtractor extends LMSExtractor {
-    constructor() {
-        super();
-        console.log('🎓 D2L/Brightspace Extractor loaded');
-    }
-    
-    async extractDatesFromD2L() {
-        console.log('Extracting from D2L/Brightspace...');
-        
-        const dates = [];
-        
-        // Method 1: Extract from d2l-html-block elements
-        const htmlBlocks = document.querySelectorAll('d2l-html-block');
-        for (const block of htmlBlocks) {
-            dates.push(...await this.extractFromD2LHtmlBlock(block));
-        }
-        
-        // Method 2: Extract from .d2l-htmlblock-untrusted
-        const untrustedBlocks = document.querySelectorAll('.d2l-htmlblock-untrusted');
-        for (const block of untrustedBlocks) {
-            dates.push(...this.extractFromD2LUntrustedBlock(block));
-        }
-        
-        // Method 3: Extract from news/announcements
-        dates.push(...this.extractFromD2LNews());
-        
-        // Method 4: Extract from content areas
-        dates.push(...this.extractFromD2LContent());
-        
-        return this.deduplicateDates(dates);
-    }
-    
-    async extractFromD2LHtmlBlock(block) {
-        const dates = [];
-        
-        // Try to get HTML from attribute
-        const html = block.getAttribute('html');
-        if (html) {
-            dates.push(...this.extractFromHTML(html, 'd2l-html-attribute'));
-        }
-        
-        // Try to access shadow DOM
-        try {
-            const shadowRoot = block.shadowRoot;
-            if (shadowRoot) {
-                // Look for content inside shadow DOM
-                const content = shadowRoot.querySelector('.d2l-html-block-content') || 
-                               shadowRoot.querySelector('slot') ||
-                               shadowRoot;
-                
-                if (content) {
-                    const text = content.textContent || '';
-                    if (text) {
-                        dates.push(...this.findDatesInText(text).map(date => ({
-                            ...date,
-                            source: 'd2l-shadow-dom'
-                        })));
-                    }
-                }
-            }
-        } catch (e) {
-            console.warn('Cannot access D2L shadow DOM:', e);
-        }
-        
         return dates;
     }
     
-    extractFromD2LUntrustedBlock(block) {
-        const dates = [];
-        
-        // The HTML might be in child elements
-        const children = block.querySelectorAll('*');
-        
-        // Check each child for text
-        children.forEach(child => {
-            const text = child.textContent || '';
-            if (text.trim().length > 3) {
-                dates.push(...this.findDatesInText(text).map(date => ({
-                    ...date,
-                    source: 'd2l-untrusted',
-                    element: child
-                })));
-            }
-        });
-        
-        // Also check the block itself
-        const blockText = block.textContent || '';
-        if (blockText.trim().length > 3) {
-            dates.push(...this.findDatesInText(blockText).map(date => ({
-                ...date,
-                source: 'd2l-untrusted-block'
-            })));
-        }
-        
-        return dates;
-    }
-    
-    extractFromD2LNews() {
-        const dates = [];
-        
-        // Look for news/announcement items
-        const newsItems = document.querySelectorAll('.d2l-datalist-item-content, .d2l-news-item, [class*="news"], [class*="announcement"]');
-        
-        newsItems.forEach(item => {
-            // Extract from heading
-            const heading = item.querySelector('h1, h2, h3, h4, .d2l-heading');
-            if (heading) {
-                const headingText = heading.textContent || '';
-                dates.push(...this.findDatesInText(headingText).map(date => ({
-                    ...date,
-                    source: 'd2l-news-heading',
-                    element: heading
-                })));
-            }
-            
-            // Extract from content
-            const content = item.textContent || '';
-            dates.push(...this.findDatesInText(content).map(date => ({
-                ...date,
-                source: 'd2l-news-content',
-                element: item
-            })));
-        });
-        
-        return dates;
-    }
-    
-    extractFromD2LContent() {
-        const dates = [];
-        
-        // Look in various content areas
-        const contentSelectors = [
-            '.d2l-textblock',
-            '.d2l-htmlblock',
-            '.d2l-richtext',
-            '[class*="content"]',
-            '[class*="description"]',
-            '[class*="instruction"]'
+    isFalsePositive(text) {
+        const lower = text.toLowerCase();
+        const falsePositives = [
+            /^\d+$/,
+            /^\d+\.\d+$/,
+            /^\d+:\d+$/,
+            /^page\s+\d+/i,
+            /^http/i,
+            /^\d+%\s*$/,
+            /^\(\d+\)$/,
+            /^\d+[-–]\d+$/
         ];
         
-        contentSelectors.forEach(selector => {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(element => {
-                const text = element.textContent || '';
-                if (text.trim().length > 10) {
-                    dates.push(...this.findDatesInText(text).map(date => ({
-                        ...date,
-                        source: 'd2l-content',
-                        element: element
-                    })));
+        return falsePositives.some(fp => fp.test(lower));
+    }
+    
+    highlightDatesInElement(element, dates) {
+        try {
+            const originalHTML = element.innerHTML;
+            let modifiedHTML = originalHTML;
+            
+            // Sort dates by position (last to first)
+            dates.sort((a, b) => b.index - a.index);
+            
+            dates.forEach(date => {
+                const escaped = this.escapeRegExp(date.text);
+                const regex = new RegExp(`(${escaped})`, 'gi');
+                
+                const highlight = `<span class="lms-pdf-date" 
+                                        style="background:#FFEB3B;color:#000;padding:2px 4px;border-radius:3px;font-weight:bold;border:2px solid #FFC107;cursor:pointer;"
+                                        data-date="${this.escapeHTML(date.text)}"
+                                        onclick="window.lmsPDFExtractor?.onDateClick(this, '${this.escapeHTML(date.text)}')">
+                                    ${this.escapeHTML(date.text)}
+                                  </span>`;
+                
+                modifiedHTML = modifiedHTML.replace(regex, highlight);
+                this.extractedDates.add(date.text);
+            });
+            
+            if (modifiedHTML !== originalHTML) {
+                element.innerHTML = modifiedHTML;
+            }
+        } catch (error) {
+            console.error('Error highlighting dates:', error);
+        }
+    }
+    
+    highlightTextNode(textNode, dates) {
+        try {
+            let html = textNode.textContent;
+            dates.sort((a, b) => b.index - a.index);
+            
+            dates.forEach(date => {
+                const escaped = this.escapeRegExp(date.text);
+                const regex = new RegExp(`(${escaped})`, 'g');
+                
+                const highlight = `<span class="lms-pdf-date" 
+                                        style="background:#FFEB3B;color:#000;padding:2px 4px;border-radius:3px;font-weight:bold;border:2px solid #FFC107;cursor:pointer;"
+                                        data-date="${this.escapeHTML(date.text)}">
+                                    ${this.escapeHTML(date.text)}
+                                  </span>`;
+                
+                html = html.replace(regex, highlight);
+                this.extractedDates.add(date.text);
+            });
+            
+            const span = document.createElement('span');
+            span.innerHTML = html;
+            textNode.parentNode.replaceChild(span, textNode);
+        } catch (error) {
+            console.error('Error highlighting text node:', error);
+        }
+    }
+    
+    onDateClick(element, dateText) {
+        // Flash effect
+        const originalBg = element.style.backgroundColor;
+        element.style.backgroundColor = '#FFD54F';
+        element.style.borderColor = '#FFA000';
+        
+        setTimeout(() => {
+            element.style.backgroundColor = originalBg;
+            element.style.borderColor = '#FFC107';
+        }, 300);
+        
+        // Show tooltip
+        this.showDateTooltip(element, dateText);
+        
+        console.log('📅 PDF date clicked:', dateText);
+    }
+    
+    showDateTooltip(element, text) {
+        const tooltip = document.createElement('div');
+        tooltip.textContent = `📅 ${text}`;
+        tooltip.style.cssText = `
+            position: absolute;
+            background: rgba(0,0,0,0.9);
+            color: white;
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            z-index: 10000;
+            pointer-events: none;
+            max-width: 250px;
+            font-family: sans-serif;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        `;
+        
+        const rect = element.getBoundingClientRect();
+        tooltip.style.left = `${rect.left + window.scrollX}px`;
+        tooltip.style.top = `${rect.top + window.scrollY - 40}px`;
+        
+        document.body.appendChild(tooltip);
+        
+        setTimeout(() => {
+            if (tooltip.parentNode) {
+                tooltip.remove();
+            }
+        }, 2000);
+    }
+    
+    shareWithMainExtractor() {
+        try {
+            const dates = Array.from(this.extractedDates);
+            
+            // Dispatch event for main LMS extractor
+            const event = new CustomEvent('pdfDatesExtracted', {
+                detail: { 
+                    dates: dates,
+                    source: 'lms-pdf-extractor',
+                    count: dates.length
                 }
             });
-        });
-        
-        return dates;
-    }
-}
-
-// ====== AUTO-DETECT AND INITIALIZE ======
-(function() {
-    console.log('🎓 LMS Auto-detection starting...');
-    
-    const init = () => {
-        // Check if we're on an LMS
-        const isD2L = document.querySelector('d2l-html-block, .d2l-htmlblock-untrusted, body[d2l-branding]');
-        const isCanvas = document.querySelector('#content, .ic-Dashboard-card, .ic-app');
-        const isBlackboard = document.querySelector('.breadcrumbs, .container, .courseMenu');
-        const isMoodle = document.querySelector('.navbar, .header, .course-content');
-        
-        let extractor;
-        
-        if (isD2L) {
-            console.log('Detected D2L/Brightspace');
-            extractor = new D2LExtractor();
-            window.lmsExtractor = extractor;
+            window.dispatchEvent(event);
             
-            // Auto-extract after page loads
-            setTimeout(async () => {
-                const dates = await extractor.extractDatesFromD2L();
-                if (dates.length > 0) {
-                    console.log(`✅ Extracted ${dates.length} dates from D2L`);
-                    showLMSNotification(dates);
-                }
-            }, 3000);
-            
-        } else if (isCanvas || isBlackboard || isMoodle) {
-            console.log('Detected LMS platform');
-            extractor = new LMSExtractor();
-            window.lmsExtractor = extractor;
-            
-            setTimeout(async () => {
-                const dates = await extractor.extract();
-                if (dates.length > 0) {
-                    console.log(`✅ Extracted ${dates.length} dates from LMS`);
-                    showLMSNotification(dates);
-                }
-            }, 3000);
-        } else {
-            console.log('Not an LMS page');
+            // Try to share with main extractor
+            if (window.lmsExtractor && typeof window.lmsExtractor.addDates === 'function') {
+                window.lmsExtractor.addDates(dates);
+                console.log(`📤 Shared ${dates.length} PDF dates with main extractor`);
+            }
+        } catch (error) {
+            console.log('Could not share dates:', error.message);
         }
-    };
+    }
     
-    function showLMSNotification(dates) {
-        // Create a simple notification
+    escapeRegExp(string) {
+        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    }
+    
+    escapeHTML(text) {
+        const div = document.createElement('div');
+        div.textContent = text;
+        return div.innerHTML;
+    }
+    
+    showNotification(message, color) {
         const notification = document.createElement('div');
+        notification.textContent = message;
         notification.style.cssText = `
             position: fixed;
             top: 20px;
+            right: 20px;
+            background: ${color};
+            color: white;
+            padding: 12px 20px;
+            border-radius: 8px;
+            z-index: 10000;
+            font-family: sans-serif;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            font-weight: bold;
+        `;
+        
+        document.body.appendChild(notification);
+        
+        setTimeout(() => {
+            if (notification.parentNode) {
+                notification.remove();
+            }
+        }, 3000);
+    }
+    
+    getDates() {
+        return Array.from(this.extractedDates);
+    }
+}
+
+// ====== MAIN LMS EXTRACTOR WITH PDF SUPPORT ======
+// This should replace your current lms-extractor.js
+console.log('🎓 Enhanced LMS Extractor loading...');
+
+class EnhancedLMSExtractor {
+    constructor() {
+        this.extractedDates = new Set();
+        this.lmsPlatform = null;
+        this.pdfExtractor = null;
+        
+        this.init();
+    }
+    
+    init() {
+        console.log('🎓 Enhanced LMS Extractor initializing...');
+        
+        // Detect LMS platform
+        this.detectPlatform();
+        
+        // Initialize PDF extractor if we're on an LMS
+        if (this.lmsPlatform) {
+            console.log(`🎓 Detected ${this.lmsPlatform}, initializing PDF support...`);
+            this.pdfExtractor = new LMSPDFExtractor();
+            
+            // Listen for PDF dates
+            window.addEventListener('pdfDatesExtracted', (event) => {
+                console.log(`Received ${event.detail.count} dates from PDF extractor`);
+                this.addDates(event.detail.dates);
+            });
+        }
+        
+        // Auto-extract after page loads
+        setTimeout(() => {
+            this.autoExtract();
+        }, 3000);
+    }
+    
+    detectPlatform() {
+        const url = window.location.href.toLowerCase();
+        const hostname = window.location.hostname.toLowerCase();
+        
+        if (hostname.includes('brightspace') || hostname.includes('d2l') || url.includes('/d2l/')) {
+            this.lmsPlatform = 'Brightspace/D2L';
+        } else if (hostname.includes('canvas') || hostname.includes('instructure')) {
+            this.lmsPlatform = 'Canvas';
+        } else if (hostname.includes('blackboard')) {
+            this.lmsPlatform = 'Blackboard';
+        } else if (hostname.includes('moodle')) {
+            this.lmsPlatform = 'Moodle';
+        } else if (url.includes('syllabus') || url.includes('assignment') || url.includes('course')) {
+            this.lmsPlatform = 'Generic LMS';
+        }
+    }
+    
+    async autoExtract() {
+        console.log('🔍 Auto-extracting from LMS...');
+        
+        // Step 1: Extract from LMS page structure
+        const lmsDates = await this.extractFromLMSStructure();
+        
+        // Step 2: If we have a PDF extractor, let it scan PDFs
+        if (this.pdfExtractor && this.pdfExtractor.hasPDFs) {
+            console.log('📄 Found PDFs, scanning them...');
+            // PDF extractor will run automatically and share dates via events
+        }
+        
+        // Step 3: Also scan page text as fallback
+        const textDates = this.scanPageText();
+        
+        const totalDates = lmsDates.length + textDates.length;
+        console.log(`📊 Total dates found: ${totalDates}`);
+        
+        if (totalDates > 0) {
+            this.showSummary(totalDates);
+        }
+    }
+    
+    async extractFromLMSStructure() {
+        console.log('🔍 Extracting from LMS structure...');
+        const dates = [];
+        
+        // Platform-specific extraction logic
+        switch (this.lmsPlatform) {
+            case 'Brightspace/D2L':
+                dates.push(...this.extractFromD2L());
+                break;
+            case 'Canvas':
+                dates.push(...this.extractFromCanvas());
+                break;
+            case 'Blackboard':
+                dates.push(...this.extractFromBlackboard());
+                break;
+            case 'Moodle':
+                dates.push(...this.extractFromMoodle());
+                break;
+            default:
+                dates.push(...this.extractFromGeneric());
+        }
+        
+        console.log(`Found ${dates.length} dates in LMS structure`);
+        return dates;
+    }
+    
+    extractFromD2L() {
+        const dates = [];
+        
+        // D2L-specific extraction
+        const d2lSelectors = [
+            '.d2l-htmlblock-untrusted',
+            'd2l-html-block',
+            '.d2l-richtext-editor',
+            '.d2l-textblock'
+        ];
+        
+        d2lSelectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                const text = element.textContent || '';
+                const foundDates = this.extractDatesFromText(text);
+                dates.push(...foundDates);
+            });
+        });
+        
+        return dates;
+    }
+    
+    extractFromCanvas() {
+        const dates = [];
+        const selectors = ['.user_content', '.assignment-description', '.discussion-entry'];
+        
+        selectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                const text = element.textContent || '';
+                const foundDates = this.extractDatesFromText(text);
+                dates.push(...foundDates);
+            });
+        });
+        
+        return dates;
+    }
+    
+    extractFromBlackboard() {
+        const dates = [];
+        const selectors = ['.vtbegenerated', '.content', '.details'];
+        
+        selectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                const text = element.textContent || '';
+                const foundDates = this.extractDatesFromText(text);
+                dates.push(...foundDates);
+            });
+        });
+        
+        return dates;
+    }
+    
+    extractFromMoodle() {
+        const dates = [];
+        const selectors = ['.content', '.posting', '.forum-post'];
+        
+        selectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                const text = element.textContent || '';
+                const foundDates = this.extractDatesFromText(text);
+                dates.push(...foundDates);
+            });
+        });
+        
+        return dates;
+    }
+    
+    extractFromGeneric() {
+        const dates = [];
+        const selectors = [
+            'article',
+            'main',
+            '.content',
+            '.main-content',
+            '#content',
+            '[class*="content"]',
+            '[class*="assignment"]',
+            '[class*="syllabus"]'
+        ];
+        
+        selectors.forEach(selector => {
+            const elements = document.querySelectorAll(selector);
+            elements.forEach(element => {
+                const text = element.textContent || '';
+                if (text.length > 100) { // Only scan substantial content
+                    const foundDates = this.extractDatesFromText(text);
+                    dates.push(...foundDates);
+                }
+            });
+        });
+        
+        return dates;
+    }
+    
+    scanPageText() {
+        const dates = [];
+        const walker = document.createTreeWalker(
+            document.body,
+            NodeFilter.SHOW_TEXT,
+            {
+                acceptNode: (node) => {
+                    const parent = node.parentElement;
+                    if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE')) {
+                        return NodeFilter.FILTER_REJECT;
+                    }
+                    return node.textContent.trim().length > 3 ? 
+                           NodeFilter.FILTER_ACCEPT : 
+                           NodeFilter.FILTER_REJECT;
+                }
+            }
+        );
+        
+        let node;
+        while ((node = walker.nextNode())) {
+            const text = node.textContent;
+            const foundDates = this.extractDatesFromText(text);
+            dates.push(...foundDates);
+        }
+        
+        console.log(`Found ${dates.length} dates in page text`);
+        return dates;
+    }
+    
+    extractDatesFromText(text) {
+        const dates = [];
+        const patterns = [
+            /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+\d{1,2}(?:st|nd|rd|th)?\b/gi,
+            /\b(\d{1,2})[\/\-\.](\d{1,2})(?:[\/\-\.](\d{2,4}))?\b/g,
+            /(?:due\s*|deadline\s*|exam\s*|assignment\s*)[:;\-\s]*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s+\d{1,2}\b/gi
+        ];
+        
+        patterns.forEach(pattern => {
+            let match;
+            pattern.lastIndex = 0;
+            
+            while ((match = pattern.exec(text)) !== null) {
+                const dateText = match[0].trim();
+                if (dateText.length > 4) { // Skip very short matches
+                    dates.push(dateText);
+                    this.extractedDates.add(dateText);
+                }
+            }
+        });
+        
+        return dates;
+    }
+    
+    addDates(dates) {
+        dates.forEach(date => {
+            if (date && !this.extractedDates.has(date)) {
+                this.extractedDates.add(date);
+            }
+        });
+        
+        console.log(`Total unique dates: ${this.extractedDates.size}`);
+        return this.extractedDates.size;
+    }
+    
+    showSummary(count) {
+        const summary = document.createElement('div');
+        summary.style.cssText = `
+            position: fixed;
+            top: 60px;
             right: 20px;
             background: #4CAF50;
             color: white;
             padding: 12px 20px;
             border-radius: 8px;
-            z-index: 10000;
-            font-family: -apple-system, sans-serif;
-            font-size: 14px;
+            z-index: 9999;
+            font-family: sans-serif;
             box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            font-weight: bold;
             cursor: pointer;
         `;
         
-        notification.textContent = `📅 Found ${dates.length} academic dates`;
-        notification.title = 'Click to view dates';
+        summary.textContent = `📅 Found ${count} academic dates`;
+        summary.title = 'Click to view dates';
         
-        notification.addEventListener('click', () => {
-            showDatesModal(dates);
-            notification.remove();
+        summary.addEventListener('click', () => {
+            this.showDatesModal();
+            summary.remove();
         });
         
-        document.body.appendChild(notification);
+        document.body.appendChild(summary);
         
-        // Auto-remove after 10 seconds
         setTimeout(() => {
-            if (notification.parentNode) {
-                notification.remove();
+            if (summary.parentNode) {
+                summary.remove();
             }
         }, 10000);
     }
     
-    function showDatesModal(dates) {
-        // Create modal to show dates
+    showDatesModal() {
+        const dates = Array.from(this.extractedDates);
+        if (dates.length === 0) return;
+        
         const modal = document.createElement('div');
         modal.style.cssText = `
             position: fixed;
@@ -672,7 +851,7 @@ class D2LExtractor extends LMSExtractor {
             right: 0;
             bottom: 0;
             background: rgba(0,0,0,0.7);
-            z-index: 10001;
+            z-index: 10000;
             display: flex;
             justify-content: center;
             align-items: center;
@@ -687,22 +866,20 @@ class D2LExtractor extends LMSExtractor {
                             style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666;">×</button>
                 </div>
                 <div style="flex: 1; overflow-y: auto; padding: 20px;">
-                    ${dates.slice(0, 20).map(date => `
+                    ${dates.map(date => `
                         <div style="margin-bottom: 12px; padding: 12px; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #4CAF50;">
-                            <div style="font-weight: 600; color: #2c3e50; margin-bottom: 4px;">
-                                ${date.title}
-                            </div>
-                            <div style="display: flex; justify-content: space-between; font-size: 14px;">
-                                <span style="color: #666;">${date.formatted || date.date.toLocaleDateString()}</span>
-                                <span style="color: #888; font-size: 12px;">${date.type}</span>
-                            </div>
+                            <div style="font-weight: 600; color: #2c3e50;">${date}</div>
                         </div>
                     `).join('')}
                 </div>
                 <div style="padding: 16px; border-top: 1px solid #e0e0e0; text-align: center;">
-                    <button onclick="window.lmsExtractor.exportDates(${JSON.stringify(dates)})"
-                            style="background: #4CAF50; color: white; border: none; border-radius: 6px; padding: 10px 20px; font-size: 14px; cursor: pointer;">
-                        Export to Calendar
+                    <button onclick="navigator.clipboard.writeText(${JSON.stringify(dates.join('\\n'))})"
+                            style="background: #2196F3; color: white; border: none; border-radius: 6px; padding: 10px 20px; font-size: 14px; cursor: pointer; margin-right: 10px;">
+                        Copy Dates
+                    </button>
+                    <button onclick="this.closest('[style*=\"position: fixed\"]').remove()"
+                            style="background: #f5f5f5; color: #333; border: none; border-radius: 6px; padding: 10px 20px; font-size: 14px; cursor: pointer;">
+                        Close
                     </button>
                 </div>
             </div>
@@ -711,12 +888,10 @@ class D2LExtractor extends LMSExtractor {
         document.body.appendChild(modal);
     }
     
-    // Initialize
-    if (document.readyState === 'loading') {
-        document.addEventListener('DOMContentLoaded', () => {
-            setTimeout(init, 1000);
-        });
-    } else {
-        setTimeout(init, 1000);
+    getDates() {
+        return Array.from(this.extractedDates);
     }
-})();
+}
+
+// Initialize
+window.lmsExtractor = new EnhancedLMSExtractor();
