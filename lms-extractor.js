@@ -1,512 +1,688 @@
-// lms-pdf-extractor.js - Handles embedded PDFs in LMS
-console.log('📄 LMS PDF Extractor loaded');
+// UNIVERSAL PDF DATE SCANNER
+console.log('🎯 Universal PDF Date Scanner');
 
-class LMSPDFExtractor {
+class UniversalPDFDateScanner {
     constructor() {
-        this.extractedDates = new Set();
-        this.pdfIframes = new Set();
+        this.allDates = [];
         this.isActive = false;
-        
-        // Date patterns for academic content
-        this.datePatterns = [
-            // Month Day (January 15)
-            /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+\d{1,2}(?:st|nd|rd|th)?\b/gi,
-            
-            // MM/DD/YYYY or DD/MM/YYYY
-            /\b(0?[1-9]|1[0-2])[\/\-\.](0?[1-9]|[12][0-9]|3[01])[\/\-\.](\d{4})\b/g,
-            
-            // MM/DD or DD/MM
-            /\b(0?[1-9]|1[0-2])[\/\-\.](0?[1-9]|[12][0-9]|3[01])\b/g,
-            
-            // Academic deadlines
-            /(?:due\s*|deadline\s*|exam\s*|quiz\s*|test\s*|assignment\s*|homework\s*|project\s*|lab\s*|midterm\s*|final\s*|submission\s*)[:;\-\s]*(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+\d{1,2}(?:st|nd|rd|th)?/gi,
-            
-            // Simple dates
-            /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s+\d{1,2}\b/gi
-        ];
+        this.highlightedSpans = new Set();
+        this.datePatterns = this.createDatePatterns();
         
         this.init();
     }
     
-    init() {
-        console.log('📄 LMS PDF Extractor initializing...');
-        
-        // Check if we're on an LMS with PDFs
-        this.detectLMSPDFs();
-        
-        // Setup observer for dynamic content
-        this.setupObserver();
-        
-        // Setup keyboard shortcut
-        this.setupShortcuts();
-        
-        // Auto-start on LMS pages
-        setTimeout(() => {
-            if (this.hasPDFs) {
-                console.log('📄 Found PDFs on LMS page, auto-activating...');
-                this.activate();
-            }
-        }, 2000);
-    }
-    
-    detectLMSPDFs() {
-        const url = window.location.href.toLowerCase();
-        this.isLMSPage = url.includes('brightspace') || 
-                         url.includes('d2l') || 
-                         url.includes('canvas') ||
-                         url.includes('blackboard') ||
-                         url.includes('moodle') ||
-                         document.querySelector('.d2l-htmlblock-untrusted, .user_content, .vtbegenerated');
-        
-        // Look for PDFs in various forms
-        this.findPDFElements();
-        
-        this.hasPDFs = this.pdfIframes.size > 0 || 
-                      document.querySelector('embed[type="application/pdf"]') ||
-                      document.querySelector('object[type="application/pdf"]');
-        
-        console.log('📄 LMS PDF Detection:', {
-            isLMSPage: this.isLMSPage,
-            pdfIframes: this.pdfIframes.size,
-            hasPDFs: this.hasPDFs
-        });
-    }
-    
-    findPDFElements() {
-        // Look for iframes that might contain PDFs
-        const iframes = document.querySelectorAll('iframe');
-        iframes.forEach(iframe => {
-            const src = iframe.src || '';
-            if (src.includes('.pdf') || 
-                src.includes('pdfjs') ||
-                src.includes('viewer') ||
-                iframe.title.toLowerCase().includes('pdf')) {
-                this.pdfIframes.add(iframe);
-            }
-        });
-        
-        // Look for PDF embeds
-        const embeds = document.querySelectorAll('embed[type="application/pdf"], object[type="application/pdf"]');
-        embeds.forEach(embed => this.pdfIframes.add(embed));
-    }
-    
-    setupObserver() {
-        this.observer = new MutationObserver((mutations) => {
-            mutations.forEach((mutation) => {
-                if (mutation.addedNodes.length > 0) {
-                    this.findPDFElements();
-                    
-                    if (this.isActive && this.pdfIframes.size > 0) {
-                        setTimeout(() => this.scanAllPDFs(), 1000);
-                    }
-                }
-            });
-        });
-        
-        this.observer.observe(document.body, {
-            childList: true,
-            subtree: true
-        });
-    }
-    
-    setupShortcuts() {
-        document.addEventListener('keydown', (e) => {
-            if (e.ctrlKey && e.shiftKey && e.key === 'P') { // Ctrl+Shift+P for PDFs
-                e.preventDefault();
-                this.toggle();
-            }
-        });
-    }
-    
-    toggle() {
-        if (this.isActive) {
-            this.deactivate();
-        } else {
-            this.activate();
-        }
-    }
-    
-    activate() {
-        if (this.isActive) return;
-        
-        console.log('🎯 Activating LMS PDF extraction...');
-        this.isActive = true;
-        
-        // Scan immediately
-        this.scanAllPDFs();
-        
-        this.showNotification('📄 Scanning PDFs for dates...', '#4CAF50');
-    }
-    
-    deactivate() {
-        if (!this.isActive) return;
-        
-        console.log('🔴 Deactivating LMS PDF extraction...');
-        this.isActive = false;
-        
-        this.showNotification('📄 PDF scanning OFF', '#666');
-    }
-    
-    async scanAllPDFs() {
-        if (!this.isActive) return;
-        
-        console.log(`🔍 Scanning ${this.pdfIframes.size} PDF element(s)...`);
-        let totalDates = 0;
-        
-        // Strategy 1: Try to access iframe content
-        for (const element of this.pdfIframes) {
-            if (element.tagName === 'IFRAME') {
-                totalDates += await this.scanIframePDF(element);
-            } else if (element.tagName === 'EMBED' || element.tagName === 'OBJECT') {
-                totalDates += await this.scanEmbeddedPDF(element);
-            }
-        }
-        
-        // Strategy 2: Look for PDF.js viewers
-        totalDates += this.scanPDFjsViewers();
-        
-        // Strategy 3: Look for text that might be from a PDF
-        totalDates += this.scanTextContent();
-        
-        if (totalDates > 0) {
-            console.log(`✅ Found ${totalDates} date(s) in PDFs`);
-            this.showNotification(`📅 Found ${totalDates} date(s) in PDFs`, '#4CAF50');
-            this.shareWithMainExtractor();
-        }
-        
-        return totalDates;
-    }
-    
-    async scanIframePDF(iframe) {
-        let datesFound = 0;
-        
-        try {
-            // Try to access iframe document
-            const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-            if (!iframeDoc) {
-                console.log('Cannot access iframe document (CORS)');
-                return 0;
-            }
+    createDatePatterns() {
+        return [
+            // Full formats with day names
+            /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}\b/gi,
             
-            // Check for PDF.js viewer
-            const isPDFjs = iframeDoc.querySelector('.textLayer, .pdfViewer');
+            // Standard month day, year
+            /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}\b/gi,
             
-            if (isPDFjs) {
-                // PDF.js viewer - extract text from text layer
-                datesFound += this.extractFromPDFjsViewer(iframeDoc);
-            } else {
-                // Regular iframe - extract all text
-                datesFound += this.extractAllText(iframeDoc.body);
-            }
+            // Abbreviated months
+            /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\.?\s+\d{1,2},?\s+\d{4}\b/gi,
             
-        } catch (error) {
-            console.log('Error accessing iframe:', error.message);
+            // Numeric formats (MM/DD/YYYY, DD/MM/YYYY)
+            /\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}\b/g,
             
-            // Alternative: Try to get text via OCR/rendering simulation
-            datesFound += this.simulateTextExtraction(iframe);
-        }
-        
-        return datesFound;
-    }
-    
-    async scanEmbeddedPDF(embed) {
-        try {
-            const doc = embed.contentDocument || embed.contentWindow?.document;
-            if (doc) {
-                return this.extractAllText(doc.body);
-            }
-        } catch (error) {
-            console.log('Cannot access embedded PDF:', error.message);
-        }
-        return 0;
-    }
-    
-    scanPDFjsViewers() {
-        let datesFound = 0;
-        
-        // Look for PDF.js viewers in main document
-        const textLayers = document.querySelectorAll('.textLayer, .text-layer');
-        textLayers.forEach(layer => {
-            const text = layer.textContent || '';
-            const dates = this.extractDates(text);
-            datesFound += dates.length;
+            // Year-Month-Day (ISO-like)
+            /\b\d{4}[\-\/]\d{1,2}[\-\/]\d{1,2}\b/g,
             
-            // Highlight dates if we can
-            if (dates.length > 0) {
-                this.highlightDatesInElement(layer, dates);
-            }
-        });
-        
-        return datesFound;
-    }
-    
-    scanTextContent() {
-        let datesFound = 0;
-        
-        // Look for large text blocks that might be PDF content
-        const selectors = [
-            '.d2l-htmlblock-untrusted',
-            '.user_content',
-            '.vtbegenerated',
-            '[class*="content"]',
-            '[class*="document"]',
-            'article',
-            'section'
+            // Just month and day (contextual)
+            /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}\b(?!\s*\d{4})/gi,
+            /\b(jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)\.?\s+\d{1,2}\b(?!\s*\d{4})/gi,
+            
+            // Year only (in context)
+            /\b(?:19|20)\d{2}\b/g,
+            
+            // Dates with ordinal indicators
+            /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}(?:st|nd|rd|th),?\s+\d{4}\b/gi,
+            
+            // Relative dates
+            /\b(today|tomorrow|yesterday|next week|last week|next month|last month|next year|last year)\b/gi
         ];
+    }
+    
+    init() {
+        console.log('🚀 Initializing universal date scanner...');
         
-        selectors.forEach(selector => {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(element => {
-                const text = element.textContent || '';
-                if (text.length > 500) { // Likely a document
-                    const dates = this.extractDates(text);
-                    datesFound += dates.length;
-                    
-                    if (dates.length > 0) {
-                        console.log(`Found ${dates.length} dates in ${selector}`);
-                        this.highlightDatesInElement(element, dates);
-                    }
-                }
+        // Auto-detect and scan PDF
+        setTimeout(() => this.autoDetectAndScan(), 2000);
+        
+        // Add interface
+        this.addInterface();
+        
+        // Keyboard shortcuts
+        this.setupKeyboardShortcuts();
+    }
+    
+    autoDetectAndScan() {
+        console.log('🔍 Auto-detecting PDF...');
+        
+        try {
+            const iframe = document.querySelector('iframe.d2l-fileviewer-rendered-pdf');
+            if (iframe) {
+                console.log('✅ PDF iframe detected');
+                this.scanPDF();
+            } else {
+                console.log('⏳ No PDF iframe found, retrying...');
+                setTimeout(() => this.autoDetectAndScan(), 1000);
+            }
+        } catch (error) {
+            console.log('Auto-detect error:', error);
+        }
+    }
+    
+    scanPDF() {
+        console.log('🔬 Scanning PDF for ALL dates...');
+        
+        try {
+            const iframe = document.querySelector('iframe.d2l-fileviewer-rendered-pdf');
+            const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+            
+            // Get text from PDF
+            const text = this.extractTextFromPDF(iframeDoc);
+            console.log(`📊 Extracted ${text.length} characters`);
+            
+            // Find ALL dates
+            const allDates = this.findAllDates(text);
+            console.log(`📅 Found ${allDates.length} date occurrences`);
+            
+            // Filter and categorize
+            const categorized = this.categorizeDates(allDates);
+            
+            // Display results
+            this.displayResults(categorized);
+            
+            // Optional: highlight dates
+            if (this.isActive) {
+                this.highlightAllDates(iframeDoc, categorized.validDates);
+            }
+            
+            return categorized;
+            
+        } catch (error) {
+            console.error('❌ Scan failed:', error);
+            this.showNotification('Failed to scan PDF', '#f44336');
+            return null;
+        }
+    }
+    
+    extractTextFromPDF(iframeDoc) {
+        // Try multiple extraction methods
+        let text = '';
+        
+        // Method 1: Text layers (PDF.js)
+        const textLayers = iframeDoc.querySelectorAll('.textLayer');
+        textLayers.forEach(layer => {
+            text += ' ' + (layer.textContent || '');
+        });
+        
+        // Method 2: Direct text
+        if (text.length < 100) {
+            text = iframeDoc.body.innerText || iframeDoc.body.textContent || '';
+        }
+        
+        // Method 3: Span elements
+        if (text.length < 100) {
+            const spans = iframeDoc.querySelectorAll('span');
+            spans.forEach(span => {
+                text += ' ' + (span.textContent || '');
             });
-        });
-        
-        return datesFound;
-    }
-    
-    extractFromPDFjsViewer(doc) {
-        let datesFound = 0;
-        
-        // PDF.js stores text in spans within .textLayer
-        const textSpans = doc.querySelectorAll('.textLayer span, .text-layer span');
-        textSpans.forEach(span => {
-            const text = span.textContent || '';
-            const dates = this.extractDates(text);
-            datesFound += dates.length;
-            
-            if (dates.length > 0) {
-                this.highlightTextNode(span, dates);
-            }
-        });
-        
-        return datesFound;
-    }
-    
-    extractAllText(element) {
-        const text = element.textContent || '';
-        const dates = this.extractDates(text);
-        
-        if (dates.length > 0) {
-            console.log(`Found ${dates.length} dates in PDF content`);
-            this.highlightDatesInElement(element, dates);
         }
         
-        return dates.length;
+        // Clean text
+        text = text.replace(/\s+/g, ' ').trim();
+        
+        return text;
     }
     
-    simulateTextExtraction(iframe) {
-        // Try to extract text by simulating user interaction
-        let datesFound = 0;
-        
-        // Method 1: Try to get text via canvas (for rendered PDFs)
-        const canvases = iframe.contentDocument?.querySelectorAll('canvas');
-        if (canvases && canvases.length > 0) {
-            console.log('PDF appears to be canvas-rendered, trying alternative extraction');
-            
-            // Look for text overlay
-            const parent = iframe.parentElement;
-            const textOverlay = parent?.querySelector('.textLayer, .text-layer');
-            if (textOverlay) {
-                datesFound += this.extractAllText(textOverlay);
-            }
-        }
-        
-        return datesFound;
-    }
-    
-    extractDates(text) {
-        const dates = [];
+    findAllDates(text) {
+        const allMatches = [];
         
         this.datePatterns.forEach((pattern, index) => {
-            pattern.lastIndex = 0;
+            pattern.lastIndex = 0; // Reset
             let match;
             
             while ((match = pattern.exec(text)) !== null) {
-                const dateText = match[0].trim();
+                const dateStr = match[0].trim();
+                const contextStart = Math.max(0, match.index - 50);
+                const contextEnd = Math.min(text.length, match.index + dateStr.length + 50);
+                const context = text.substring(contextStart, contextEnd);
                 
-                // Skip false positives
-                if (this.isFalsePositive(dateText)) continue;
-                
-                // Skip duplicates
-                const isDuplicate = dates.some(d => 
-                    d.text === dateText && Math.abs(d.index - match.index) < 5
-                );
-                
-                if (!isDuplicate) {
-                    dates.push({
-                        text: dateText,
-                        index: match.index,
-                        pattern: index
-                    });
-                }
+                allMatches.push({
+                    text: dateStr,
+                    patternIndex: index,
+                    context: context,
+                    index: match.index
+                });
             }
         });
         
-        return dates;
+        // Sort by position in text
+        allMatches.sort((a, b) => a.index - b.index);
+        
+        return allMatches;
     }
     
-    isFalsePositive(text) {
-        const lower = text.toLowerCase();
+    categorizeDates(dateMatches) {
+        const validDates = [];
+        const potentialDates = [];
+        const ambiguous = [];
+        
+        // Common false positives to filter
         const falsePositives = [
-            /^\d+$/,
-            /^\d+\.\d+$/,
-            /^\d+:\d+$/,
-            /^page\s+\d+/i,
-            /^http/i,
-            /^\d+%\s*$/,
-            /^\(\d+\)$/,
-            /^\d+[-–]\d+$/
+            /^\d{1,2}$/, // Just a number
+            /^\d{4}$/, // Just a year (without context)
+            /^page \d+/i,
+            /^section \d+/i,
+            /^\d+\.\d+/, // Version numbers
+            /^\d+\s*(?:am|pm)/i, // Times
+            /^\d+\/\d+\s*$/, // Fractions
+            /^\d+-\d+-\d+$/, // Phone numbers, IDs
         ];
         
-        return falsePositives.some(fp => fp.test(lower));
-    }
-    
-    highlightDatesInElement(element, dates) {
-        try {
-            const originalHTML = element.innerHTML;
-            let modifiedHTML = originalHTML;
+        dateMatches.forEach(match => {
+            const dateStr = match.text;
             
-            // Sort dates by position (last to first)
-            dates.sort((a, b) => b.index - a.index);
-            
-            dates.forEach(date => {
-                const escaped = this.escapeRegExp(date.text);
-                const regex = new RegExp(`(${escaped})`, 'gi');
-                
-                const highlight = `<span class="lms-pdf-date" 
-                                        style="background:#FFEB3B;color:#000;padding:2px 4px;border-radius:3px;font-weight:bold;border:2px solid #FFC107;cursor:pointer;"
-                                        data-date="${this.escapeHTML(date.text)}"
-                                        onclick="window.lmsPDFExtractor?.onDateClick(this, '${this.escapeHTML(date.text)}')">
-                                    ${this.escapeHTML(date.text)}
-                                  </span>`;
-                
-                modifiedHTML = modifiedHTML.replace(regex, highlight);
-                this.extractedDates.add(date.text);
-            });
-            
-            if (modifiedHTML !== originalHTML) {
-                element.innerHTML = modifiedHTML;
-            }
-        } catch (error) {
-            console.error('Error highlighting dates:', error);
-        }
-    }
-    
-    highlightTextNode(textNode, dates) {
-        try {
-            let html = textNode.textContent;
-            dates.sort((a, b) => b.index - a.index);
-            
-            dates.forEach(date => {
-                const escaped = this.escapeRegExp(date.text);
-                const regex = new RegExp(`(${escaped})`, 'g');
-                
-                const highlight = `<span class="lms-pdf-date" 
-                                        style="background:#FFEB3B;color:#000;padding:2px 4px;border-radius:3px;font-weight:bold;border:2px solid #FFC107;cursor:pointer;"
-                                        data-date="${this.escapeHTML(date.text)}">
-                                    ${this.escapeHTML(date.text)}
-                                  </span>`;
-                
-                html = html.replace(regex, highlight);
-                this.extractedDates.add(date.text);
-            });
-            
-            const span = document.createElement('span');
-            span.innerHTML = html;
-            textNode.parentNode.replaceChild(span, textNode);
-        } catch (error) {
-            console.error('Error highlighting text node:', error);
-        }
-    }
-    
-    onDateClick(element, dateText) {
-        // Flash effect
-        const originalBg = element.style.backgroundColor;
-        element.style.backgroundColor = '#FFD54F';
-        element.style.borderColor = '#FFA000';
-        
-        setTimeout(() => {
-            element.style.backgroundColor = originalBg;
-            element.style.borderColor = '#FFC107';
-        }, 300);
-        
-        // Show tooltip
-        this.showDateTooltip(element, dateText);
-        
-        console.log('📅 PDF date clicked:', dateText);
-    }
-    
-    showDateTooltip(element, text) {
-        const tooltip = document.createElement('div');
-        tooltip.textContent = `📅 ${text}`;
-        tooltip.style.cssText = `
-            position: absolute;
-            background: rgba(0,0,0,0.9);
-            color: white;
-            padding: 8px 12px;
-            border-radius: 6px;
-            font-size: 12px;
-            z-index: 10000;
-            pointer-events: none;
-            max-width: 250px;
-            font-family: sans-serif;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-        `;
-        
-        const rect = element.getBoundingClientRect();
-        tooltip.style.left = `${rect.left + window.scrollX}px`;
-        tooltip.style.top = `${rect.top + window.scrollY - 40}px`;
-        
-        document.body.appendChild(tooltip);
-        
-        setTimeout(() => {
-            if (tooltip.parentNode) {
-                tooltip.remove();
-            }
-        }, 2000);
-    }
-    
-    shareWithMainExtractor() {
-        try {
-            const dates = Array.from(this.extractedDates);
-            
-            // Dispatch event for main LMS extractor
-            const event = new CustomEvent('pdfDatesExtracted', {
-                detail: { 
-                    dates: dates,
-                    source: 'lms-pdf-extractor',
-                    count: dates.length
+            // Filter out obvious false positives
+            let isFalsePositive = false;
+            falsePositives.forEach(fp => {
+                if (fp.test(dateStr)) {
+                    isFalsePositive = true;
                 }
             });
-            window.dispatchEvent(event);
             
-            // Try to share with main extractor
-            if (window.lmsExtractor && typeof window.lmsExtractor.addDates === 'function') {
-                window.lmsExtractor.addDates(dates);
-                console.log(`📤 Shared ${dates.length} PDF dates with main extractor`);
+            if (isFalsePositive) {
+                return;
             }
-        } catch (error) {
-            console.log('Could not share dates:', error.message);
+            
+            // Try to parse as Date
+            try {
+                const parsed = new Date(dateStr);
+                const isValid = !isNaN(parsed) && 
+                               parsed.getFullYear() > 1900 && 
+                               parsed.getFullYear() < 2100;
+                
+                if (isValid) {
+                    // Format nicely
+                    const formatted = this.formatDate(parsed);
+                    validDates.push({
+                        raw: dateStr,
+                        formatted: formatted,
+                        date: parsed,
+                        context: match.context
+                    });
+                } else {
+                    potentialDates.push({
+                        text: dateStr,
+                        reason: 'Could not parse as valid date',
+                        context: match.context
+                    });
+                }
+            } catch (e) {
+                ambiguous.push({
+                    text: dateStr,
+                    reason: 'Date parsing error',
+                    context: match.context
+                });
+            }
+        });
+        
+        // Remove duplicates
+        const uniqueValid = this.removeDuplicates(validDates);
+        const uniquePotential = this.removeDuplicates(potentialDates);
+        
+        return {
+            validDates: uniqueValid,
+            potentialDates: uniquePotential,
+            ambiguous: ambiguous,
+            totalFound: dateMatches.length
+        };
+    }
+    
+    removeDuplicates(datesArray) {
+        const seen = new Set();
+        return datesArray.filter(item => {
+            const key = item.raw || item.text;
+            if (seen.has(key.toLowerCase())) {
+                return false;
+            }
+            seen.add(key.toLowerCase());
+            return true;
+        });
+    }
+    
+    formatDate(dateObj) {
+        return dateObj.toLocaleDateString('en-US', {
+            weekday: 'long',
+            year: 'numeric',
+            month: 'long',
+            day: 'numeric'
+        });
+    }
+    
+    highlightAllDates(iframeDoc, dates) {
+        console.log(`🖍️ Highlighting ${dates.length} dates...`);
+        
+        // Clear previous highlights
+        this.clearHighlights(iframeDoc);
+        
+        // Get all text spans
+        const textSpans = iframeDoc.querySelectorAll('.textLayer span');
+        
+        dates.forEach(dateInfo => {
+            this.highlightDate(iframeDoc, dateInfo.raw, textSpans);
+        });
+    }
+    
+    highlightDate(iframeDoc, dateText, allSpans) {
+        // Break date into searchable parts
+        const searchTerms = dateText.toLowerCase()
+            .replace(/[^\w\s]/g, ' ') // Replace punctuation with spaces
+            .split(/\s+/)
+            .filter(term => term.length > 1);
+        
+        // Find spans containing these terms
+        const matchingSpans = [];
+        
+        allSpans.forEach(span => {
+            const spanText = span.textContent.toLowerCase();
+            let matchesAny = false;
+            
+            searchTerms.forEach(term => {
+                if (spanText.includes(term)) {
+                    matchesAny = true;
+                }
+            });
+            
+            if (matchesAny && !this.highlightedSpans.has(span)) {
+                matchingSpans.push(span);
+                this.highlightedSpans.add(span);
+            }
+        });
+        
+        // Apply highlight if we found matching spans
+        if (matchingSpans.length > 0) {
+            this.applyHighlightToSpans(matchingSpans, dateText);
         }
     }
     
-    escapeRegExp(string) {
-        return string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    applyHighlightToSpans(spans, dateText) {
+        const color = this.getColorForDate(dateText);
+        
+        spans.forEach(span => {
+            // Save original style
+            if (!span.hasAttribute('data-original-style')) {
+                span.setAttribute('data-original-style', span.style.cssText);
+            }
+            
+            // Apply highlight
+            span.style.cssText += `
+                background: ${color.background} !important;
+                color: ${color.text} !important;
+                font-weight: bold !important;
+                border: 2px solid ${color.border} !important;
+                border-radius: 4px !important;
+                padding: 1px 3px !important;
+                margin: -1px -3px !important;
+                box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+                position: relative !important;
+                z-index: 10 !important;
+                cursor: pointer !important;
+            `;
+            
+            // Click to copy
+            span.onclick = (e) => {
+                e.stopPropagation();
+                navigator.clipboard.writeText(dateText);
+                this.showCopiedNotification(dateText);
+            };
+        });
     }
     
-    escapeHTML(text) {
-        const div = document.createElement('div');
-        div.textContent = text;
-        return div.innerHTML;
+    getColorForDate(dateText) {
+        // Assign different colors based on date recency
+        const date = new Date(dateText);
+        const now = new Date();
+        const diffTime = date - now;
+        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
+        
+        if (diffDays < 0) {
+            return { // Past dates
+                background: '#E0E0E0',
+                text: '#424242',
+                border: '#9E9E9E'
+            };
+        } else if (diffDays <= 7) {
+            return { // This week
+                background: '#FFCDD2',
+                text: '#C62828',
+                border: '#EF5350'
+            };
+        } else if (diffDays <= 30) {
+            return { // This month
+                background: '#FFF3E0',
+                text: '#EF6C00',
+                border: '#FF9800'
+            };
+        } else {
+            return { // Future dates
+                background: '#E8F5E8',
+                text: '#2E7D32',
+                border: '#4CAF50'
+            };
+        }
+    }
+    
+    clearHighlights(iframeDoc) {
+        const spans = iframeDoc.querySelectorAll('.textLayer span');
+        spans.forEach(span => {
+            if (span.hasAttribute('data-original-style')) {
+                span.style.cssText = span.getAttribute('data-original-style');
+                span.removeAttribute('data-original-style');
+                span.onclick = null;
+            }
+        });
+        this.highlightedSpans.clear();
+    }
+    
+    displayResults(categorized) {
+        // Remove existing panel
+        const existing = document.getElementById('universal-date-scanner');
+        if (existing) existing.remove();
+        
+        // Create results panel
+        const panel = document.createElement('div');
+        panel.id = 'universal-date-scanner';
+        
+        let html = `
+            <div style="
+                position: fixed;
+                top: 60px;
+                right: 20px;
+                width: 450px;
+                max-height: 80vh;
+                background: white;
+                border: 3px solid #2196F3;
+                border-radius: 10px;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                z-index: 99999;
+                font-family: sans-serif;
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+            ">
+                <!-- Header -->
+                <div style="
+                    background: linear-gradient(135deg, #2196F3, #1976D2);
+                    color: white;
+                    padding: 15px 20px;
+                    display: flex;
+                    justify-content: space-between;
+                    align-items: center;
+                ">
+                    <div>
+                        <h3 style="margin: 0; font-size: 16px;">📅 Universal Date Scanner</h3>
+                        <div style="font-size: 12px; opacity: 0.9;">
+                            Found ${categorized.totalFound} date references
+                        </div>
+                    </div>
+                    <button id="close-scanner" style="
+                        background: none;
+                        border: none;
+                        color: white;
+                        font-size: 24px;
+                        cursor: pointer;
+                        padding: 0;
+                        width: 30px;
+                        height: 30px;
+                    ">×</button>
+                </div>
+                
+                <!-- Content -->
+                <div style="padding: 20px; overflow-y: auto; flex: 1;">
+        `;
+        
+        // Valid Dates Section
+        if (categorized.validDates.length > 0) {
+            html += `
+                <div style="margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 10px 0; color: #4CAF50; display: flex; align-items: center; gap: 8px;">
+                        <span>✅</span>
+                        <span>Valid Dates (${categorized.validDates.length})</span>
+                    </h4>
+                    <div style="
+                        max-height: 200px;
+                        overflow-y: auto;
+                        border: 1px solid #E0E0E0;
+                        border-radius: 6px;
+                    ">
+            `;
+            
+            categorized.validDates.forEach((date, index) => {
+                html += `
+                    <div style="
+                        padding: 10px;
+                        border-bottom: 1px solid #F5F5F5;
+                        background: ${index % 2 === 0 ? '#FAFAFA' : 'white'};
+                        cursor: pointer;
+                    " onclick="navigator.clipboard.writeText('${date.formatted}'); alert('📋 Copied: ${date.formatted}');">
+                        <div style="font-weight: bold; color: #333;">${date.formatted}</div>
+                        <div style="font-size: 12px; color: #666; margin-top: 4px;">
+                            <div>Original: ${date.raw}</div>
+                            <div style="margin-top: 2px;">${date.date.toDateString()}</div>
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += `</div></div>`;
+        }
+        
+        // Potential Dates Section
+        if (categorized.potentialDates.length > 0) {
+            html += `
+                <div style="margin-bottom: 20px;">
+                    <h4 style="margin: 0 0 10px 0; color: #FF9800; display: flex; align-items: center; gap: 8px;">
+                        <span>⚠️</span>
+                        <span>Potential Dates (${categorized.potentialDates.length})</span>
+                    </h4>
+                    <div style="font-size: 13px; color: #666; margin-bottom: 8px;">
+                        These look like dates but need verification
+                    </div>
+                    <div style="
+                        max-height: 150px;
+                        overflow-y: auto;
+                        border: 1px solid #FFE0B2;
+                        border-radius: 6px;
+                        background: #FFF8E1;
+                    ">
+            `;
+            
+            categorized.potentialDates.forEach((date, index) => {
+                html += `
+                    <div style="
+                        padding: 8px;
+                        border-bottom: 1px solid #FFECB3;
+                        font-size: 13px;
+                    ">
+                        <div style="font-weight: bold; color: #E65100;">${date.text}</div>
+                        <div style="font-size: 11px; color: #FF8F00; margin-top: 2px;">
+                            ${date.reason}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            html += `</div></div>`;
+        }
+        
+        // Summary
+        html += `
+            <div style="
+                background: #F5F5F5;
+                padding: 12px;
+                border-radius: 6px;
+                margin-top: 10px;
+                font-size: 13px;
+            ">
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span>Total found:</span>
+                    <span style="font-weight: bold;">${categorized.totalFound}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between; margin-bottom: 8px;">
+                    <span>Valid dates:</span>
+                    <span style="color: #4CAF50; font-weight: bold;">${categorized.validDates.length}</span>
+                </div>
+                <div style="display: flex; justify-content: space-between;">
+                    <span>Potential dates:</span>
+                    <span style="color: #FF9800; font-weight: bold;">${categorized.potentialDates.length}</span>
+                </div>
+            </div>
+        `;
+        
+        // Controls
+        html += `
+                </div>
+                
+                <!-- Footer -->
+                <div style="
+                    padding: 15px 20px;
+                    background: #F5F5F5;
+                    border-top: 1px solid #E0E0E0;
+                    display: flex;
+                    gap: 10px;
+                ">
+                    <button id="scan-again" style="
+                        flex: 1;
+                        padding: 8px;
+                        background: #2196F3;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-weight: bold;
+                    ">🔄 Scan Again</button>
+                    
+                    <button id="toggle-highlight" style="
+                        flex: 1;
+                        padding: 8px;
+                        background: #4CAF50;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-weight: bold;
+                    ">🎨 Toggle Highlight</button>
+                    
+                    <button id="copy-all" style="
+                        flex: 1;
+                        padding: 8px;
+                        background: #9C27B0;
+                        color: white;
+                        border: none;
+                        border-radius: 4px;
+                        cursor: pointer;
+                        font-weight: bold;
+                    ">📋 Copy All</button>
+                </div>
+            </div>
+        `;
+        
+        panel.innerHTML = html;
+        document.body.appendChild(panel);
+        
+        // Add event listeners
+        panel.querySelector('#close-scanner').onclick = () => panel.remove();
+        panel.querySelector('#scan-again').onclick = () => this.scanPDF();
+        panel.querySelector('#toggle-highlight').onclick = () => this.toggleHighlighting();
+        panel.querySelector('#copy-all').onclick = () => {
+            const allDates = categorized.validDates.map(d => d.formatted).join('\n');
+            navigator.clipboard.writeText(allDates);
+            this.showNotification(`📋 Copied ${categorized.validDates.length} dates`, '#9C27B0');
+        };
+    }
+    
+    toggleHighlighting() {
+        this.isActive = !this.isActive;
+        
+        if (this.isActive) {
+            const iframe = document.querySelector('iframe.d2l-fileviewer-rendered-pdf');
+            if (iframe) {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                // Re-scan to get dates for highlighting
+                const text = this.extractTextFromPDF(iframeDoc);
+                const dates = this.findAllDates(text);
+                const categorized = this.categorizeDates(dates);
+                this.highlightAllDates(iframeDoc, categorized.validDates);
+            }
+            this.showNotification('🎨 Highlighting ON', '#4CAF50');
+        } else {
+            const iframe = document.querySelector('iframe.d2l-fileviewer-rendered-pdf');
+            if (iframe) {
+                const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
+                this.clearHighlights(iframeDoc);
+            }
+            this.showNotification('🎨 Highlighting OFF', '#666');
+        }
+    }
+    
+    addInterface() {
+        // Add floating action button
+        const fab = document.createElement('button');
+        fab.id = 'universal-scanner-fab';
+        fab.innerHTML = '📅';
+        fab.title = 'Universal Date Scanner';
+        fab.style.cssText = `
+            position: fixed;
+            bottom: 80px;
+            right: 20px;
+            width: 60px;
+            height: 60px;
+            background: linear-gradient(135deg, #2196F3, #1976D2);
+            color: white;
+            border: none;
+            border-radius: 50%;
+            font-size: 24px;
+            cursor: pointer;
+            z-index: 99998;
+            box-shadow: 0 6px 20px rgba(33, 150, 243, 0.4);
+            transition: all 0.3s;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        `;
+        
+        fab.onmouseenter = () => {
+            fab.style.transform = 'scale(1.1) rotate(10deg)';
+            fab.style.boxShadow = '0 8px 25px rgba(33, 150, 243, 0.6)';
+        };
+        
+        fab.onmouseleave = () => {
+            fab.style.transform = 'scale(1) rotate(0)';
+            fab.style.boxShadow = '0 6px 20px rgba(33, 150, 243, 0.4)';
+        };
+        
+        fab.onclick = () => this.scanPDF();
+        
+        document.body.appendChild(fab);
+    }
+    
+    setupKeyboardShortcuts() {
+        document.addEventListener('keydown', (e) => {
+            // Ctrl+Shift+D for date scanner
+            if (e.ctrlKey && e.shiftKey && e.key === 'D') {
+                e.preventDefault();
+                this.scanPDF();
+            }
+            
+            // Ctrl+Shift+H for highlight toggle
+            if (e.ctrlKey && e.shiftKey && e.key === 'H') {
+                e.preventDefault();
+                this.toggleHighlighting();
+            }
+        });
     }
     
     showNotification(message, color) {
@@ -519,379 +695,179 @@ class LMSPDFExtractor {
             background: ${color};
             color: white;
             padding: 12px 20px;
-            border-radius: 8px;
-            z-index: 10000;
+            border-radius: 6px;
+            z-index: 100000;
             font-family: sans-serif;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
             font-weight: bold;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
+            animation: slideIn 0.3s ease-out;
         `;
+        
+        // Add animation
+        const style = document.createElement('style');
+        style.textContent = `
+            @keyframes slideIn {
+                from {
+                    transform: translateX(100%);
+                    opacity: 0;
+                }
+                to {
+                    transform: translateX(0);
+                    opacity: 1;
+                }
+            }
+        `;
+        document.head.appendChild(style);
         
         document.body.appendChild(notification);
         
-        setTimeout(() => {
-            if (notification.parentNode) {
-                notification.remove();
-            }
-        }, 3000);
+        setTimeout(() => notification.remove(), 3000);
     }
     
-    getDates() {
-        return Array.from(this.extractedDates);
-    }
-}
-
-// ====== MAIN LMS EXTRACTOR WITH PDF SUPPORT ======
-// This should replace your current lms-extractor.js
-console.log('🎓 Enhanced LMS Extractor loading...');
-
-class EnhancedLMSExtractor {
-    constructor() {
-        this.extractedDates = new Set();
-        this.lmsPlatform = null;
-        this.pdfExtractor = null;
-        
-        this.init();
-    }
-    
-    init() {
-        console.log('🎓 Enhanced LMS Extractor initializing...');
-        
-        // Detect LMS platform
-        this.detectPlatform();
-        
-        // Initialize PDF extractor if we're on an LMS
-        if (this.lmsPlatform) {
-            console.log(`🎓 Detected ${this.lmsPlatform}, initializing PDF support...`);
-            this.pdfExtractor = new LMSPDFExtractor();
-            
-            // Listen for PDF dates
-            window.addEventListener('pdfDatesExtracted', (event) => {
-                console.log(`Received ${event.detail.count} dates from PDF extractor`);
-                this.addDates(event.detail.dates);
-            });
-        }
-        
-        // Auto-extract after page loads
-        setTimeout(() => {
-            this.autoExtract();
-        }, 3000);
-    }
-    
-    detectPlatform() {
-        const url = window.location.href.toLowerCase();
-        const hostname = window.location.hostname.toLowerCase();
-        
-        if (hostname.includes('brightspace') || hostname.includes('d2l') || url.includes('/d2l/')) {
-            this.lmsPlatform = 'Brightspace/D2L';
-        } else if (hostname.includes('canvas') || hostname.includes('instructure')) {
-            this.lmsPlatform = 'Canvas';
-        } else if (hostname.includes('blackboard')) {
-            this.lmsPlatform = 'Blackboard';
-        } else if (hostname.includes('moodle')) {
-            this.lmsPlatform = 'Moodle';
-        } else if (url.includes('syllabus') || url.includes('assignment') || url.includes('course')) {
-            this.lmsPlatform = 'Generic LMS';
-        }
-    }
-    
-    async autoExtract() {
-        console.log('🔍 Auto-extracting from LMS...');
-        
-        // Step 1: Extract from LMS page structure
-        const lmsDates = await this.extractFromLMSStructure();
-        
-        // Step 2: If we have a PDF extractor, let it scan PDFs
-        if (this.pdfExtractor && this.pdfExtractor.hasPDFs) {
-            console.log('📄 Found PDFs, scanning them...');
-            // PDF extractor will run automatically and share dates via events
-        }
-        
-        // Step 3: Also scan page text as fallback
-        const textDates = this.scanPageText();
-        
-        const totalDates = lmsDates.length + textDates.length;
-        console.log(`📊 Total dates found: ${totalDates}`);
-        
-        if (totalDates > 0) {
-            this.showSummary(totalDates);
-        }
-    }
-    
-    async extractFromLMSStructure() {
-        console.log('🔍 Extracting from LMS structure...');
-        const dates = [];
-        
-        // Platform-specific extraction logic
-        switch (this.lmsPlatform) {
-            case 'Brightspace/D2L':
-                dates.push(...this.extractFromD2L());
-                break;
-            case 'Canvas':
-                dates.push(...this.extractFromCanvas());
-                break;
-            case 'Blackboard':
-                dates.push(...this.extractFromBlackboard());
-                break;
-            case 'Moodle':
-                dates.push(...this.extractFromMoodle());
-                break;
-            default:
-                dates.push(...this.extractFromGeneric());
-        }
-        
-        console.log(`Found ${dates.length} dates in LMS structure`);
-        return dates;
-    }
-    
-    extractFromD2L() {
-        const dates = [];
-        
-        // D2L-specific extraction
-        const d2lSelectors = [
-            '.d2l-htmlblock-untrusted',
-            'd2l-html-block',
-            '.d2l-richtext-editor',
-            '.d2l-textblock'
-        ];
-        
-        d2lSelectors.forEach(selector => {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(element => {
-                const text = element.textContent || '';
-                const foundDates = this.extractDatesFromText(text);
-                dates.push(...foundDates);
-            });
-        });
-        
-        return dates;
-    }
-    
-    extractFromCanvas() {
-        const dates = [];
-        const selectors = ['.user_content', '.assignment-description', '.discussion-entry'];
-        
-        selectors.forEach(selector => {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(element => {
-                const text = element.textContent || '';
-                const foundDates = this.extractDatesFromText(text);
-                dates.push(...foundDates);
-            });
-        });
-        
-        return dates;
-    }
-    
-    extractFromBlackboard() {
-        const dates = [];
-        const selectors = ['.vtbegenerated', '.content', '.details'];
-        
-        selectors.forEach(selector => {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(element => {
-                const text = element.textContent || '';
-                const foundDates = this.extractDatesFromText(text);
-                dates.push(...foundDates);
-            });
-        });
-        
-        return dates;
-    }
-    
-    extractFromMoodle() {
-        const dates = [];
-        const selectors = ['.content', '.posting', '.forum-post'];
-        
-        selectors.forEach(selector => {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(element => {
-                const text = element.textContent || '';
-                const foundDates = this.extractDatesFromText(text);
-                dates.push(...foundDates);
-            });
-        });
-        
-        return dates;
-    }
-    
-    extractFromGeneric() {
-        const dates = [];
-        const selectors = [
-            'article',
-            'main',
-            '.content',
-            '.main-content',
-            '#content',
-            '[class*="content"]',
-            '[class*="assignment"]',
-            '[class*="syllabus"]'
-        ];
-        
-        selectors.forEach(selector => {
-            const elements = document.querySelectorAll(selector);
-            elements.forEach(element => {
-                const text = element.textContent || '';
-                if (text.length > 100) { // Only scan substantial content
-                    const foundDates = this.extractDatesFromText(text);
-                    dates.push(...foundDates);
-                }
-            });
-        });
-        
-        return dates;
-    }
-    
-    scanPageText() {
-        const dates = [];
-        const walker = document.createTreeWalker(
-            document.body,
-            NodeFilter.SHOW_TEXT,
-            {
-                acceptNode: (node) => {
-                    const parent = node.parentElement;
-                    if (parent && (parent.tagName === 'SCRIPT' || parent.tagName === 'STYLE')) {
-                        return NodeFilter.FILTER_REJECT;
-                    }
-                    return node.textContent.trim().length > 3 ? 
-                           NodeFilter.FILTER_ACCEPT : 
-                           NodeFilter.FILTER_REJECT;
-                }
-            }
-        );
-        
-        let node;
-        while ((node = walker.nextNode())) {
-            const text = node.textContent;
-            const foundDates = this.extractDatesFromText(text);
-            dates.push(...foundDates);
-        }
-        
-        console.log(`Found ${dates.length} dates in page text`);
-        return dates;
-    }
-    
-    extractDatesFromText(text) {
-        const dates = [];
-        const patterns = [
-            /\b(january|february|march|april|may|june|july|august|september|october|november|december|jan|feb|mar|apr|may|jun|jul|aug|sep|sept|oct|nov|dec)[a-z.]*\s+\d{1,2}(?:st|nd|rd|th)?\b/gi,
-            /\b(\d{1,2})[\/\-\.](\d{1,2})(?:[\/\-\.](\d{2,4}))?\b/g,
-            /(?:due\s*|deadline\s*|exam\s*|assignment\s*)[:;\-\s]*(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z.]*\s+\d{1,2}\b/gi
-        ];
-        
-        patterns.forEach(pattern => {
-            let match;
-            pattern.lastIndex = 0;
-            
-            while ((match = pattern.exec(text)) !== null) {
-                const dateText = match[0].trim();
-                if (dateText.length > 4) { // Skip very short matches
-                    dates.push(dateText);
-                    this.extractedDates.add(dateText);
-                }
-            }
-        });
-        
-        return dates;
-    }
-    
-    addDates(dates) {
-        dates.forEach(date => {
-            if (date && !this.extractedDates.has(date)) {
-                this.extractedDates.add(date);
-            }
-        });
-        
-        console.log(`Total unique dates: ${this.extractedDates.size}`);
-        return this.extractedDates.size;
-    }
-    
-    showSummary(count) {
-        const summary = document.createElement('div');
-        summary.style.cssText = `
+    showCopiedNotification(dateText) {
+        const notification = document.createElement('div');
+        notification.textContent = `📋 Copied: ${dateText}`;
+        notification.style.cssText = `
             position: fixed;
             top: 60px;
             right: 20px;
             background: #4CAF50;
             color: white;
-            padding: 12px 20px;
-            border-radius: 8px;
-            z-index: 9999;
+            padding: 10px 16px;
+            border-radius: 6px;
+            z-index: 100000;
             font-family: sans-serif;
-            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
             font-weight: bold;
-            cursor: pointer;
+            box-shadow: 0 4px 12px rgba(0,0,0,0.2);
         `;
         
-        summary.textContent = `📅 Found ${count} academic dates`;
-        summary.title = 'Click to view dates';
+        document.body.appendChild(notification);
+        setTimeout(() => notification.remove(), 1500);
+    }
+}
+
+// QUICK UNIVERSAL SCAN FUNCTION
+function quickUniversalScan() {
+    console.log('⚡ Quick universal scan...');
+    
+    try {
+        const iframe = document.querySelector('iframe.d2l-fileviewer-rendered-pdf');
+        const iframeDoc = iframe.contentDocument || iframe.contentWindow.document;
         
-        summary.addEventListener('click', () => {
-            this.showDatesModal();
-            summary.remove();
+        // Extract text
+        const text = iframeDoc.body.innerText || iframeDoc.body.textContent;
+        const cleanText = text.replace(/\s+/g, ' ').trim();
+        
+        // Comprehensive date patterns
+        const patterns = [
+            // Month Day, Year
+            /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}\b/gi,
+            // With day
+            /\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday),?\s+(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2},?\s+\d{4}\b/gi,
+            // Numeric
+            /\b\d{1,2}[\/\-\.]\d{1,2}[\/\-\.]\d{4}\b/g,
+            // Year-Month-Day
+            /\b\d{4}[\-\/]\d{1,2}[\-\/]\d{1,2}\b/g,
+            // Month Day (no year)
+            /\b(january|february|march|april|may|june|july|august|september|october|november|december)\s+\d{1,2}\b/gi
+        ];
+        
+        // Find all matches
+        const allMatches = [];
+        patterns.forEach(pattern => {
+            const matches = cleanText.match(pattern) || [];
+            matches.forEach(match => {
+                if (!allMatches.includes(match)) {
+                    allMatches.push(match);
+                }
+            });
         });
         
-        document.body.appendChild(summary);
+        // Sort and display
+        const uniqueDates = [...new Set(allMatches)].sort();
         
-        setTimeout(() => {
-            if (summary.parentNode) {
-                summary.remove();
-            }
-        }, 10000);
-    }
-    
-    showDatesModal() {
-        const dates = Array.from(this.extractedDates);
-        if (dates.length === 0) return;
+        console.log('📅 All dates found:', uniqueDates);
         
-        const modal = document.createElement('div');
-        modal.style.cssText = `
-            position: fixed;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
-            background: rgba(0,0,0,0.7);
-            z-index: 10000;
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            padding: 20px;
-        `;
+        // Copy to clipboard
+        navigator.clipboard.writeText(uniqueDates.join('\n'));
         
-        modal.innerHTML = `
-            <div style="background: white; border-radius: 12px; width: 500px; max-width: 90vw; max-height: 80vh; display: flex; flex-direction: column;">
-                <div style="padding: 20px; border-bottom: 1px solid #e0e0e0; display: flex; justify-content: space-between; align-items: center;">
-                    <h3 style="margin: 0; color: #2c3e50;">Academic Dates Found</h3>
-                    <button onclick="this.closest('[style*=\"position: fixed\"]').remove()" 
-                            style="background: none; border: none; font-size: 24px; cursor: pointer; color: #666;">×</button>
-                </div>
-                <div style="flex: 1; overflow-y: auto; padding: 20px;">
-                    ${dates.map(date => `
-                        <div style="margin-bottom: 12px; padding: 12px; background: #f8f9fa; border-radius: 6px; border-left: 4px solid #4CAF50;">
-                            <div style="font-weight: 600; color: #2c3e50;">${date}</div>
+        // Show results
+        const results = document.createElement('div');
+        results.innerHTML = `
+            <div style="
+                position: fixed;
+                top: 100px;
+                right: 20px;
+                width: 400px;
+                max-height: 500px;
+                background: white;
+                border: 3px solid #2196F3;
+                border-radius: 10px;
+                padding: 20px;
+                z-index: 99999;
+                box-shadow: 0 10px 30px rgba(0,0,0,0.2);
+                font-family: sans-serif;
+                overflow-y: auto;
+            ">
+                <h3 style="margin: 0 0 15px 0; color: #2196F3;">📅 Found ${uniqueDates.length} Dates</h3>
+                <div style="
+                    max-height: 300px;
+                    overflow-y: auto;
+                    border: 1px solid #E0E0E0;
+                    border-radius: 6px;
+                    margin-bottom: 15px;
+                ">
+                    ${uniqueDates.map(date => `
+                        <div style="
+                            padding: 8px;
+                            border-bottom: 1px solid #F5F5F5;
+                            font-family: monospace;
+                            cursor: pointer;
+                        " onclick="navigator.clipboard.writeText('${date}'); this.style.background='#E8F5E9'; setTimeout(() => this.style.background='', 200);">
+                            ${date}
                         </div>
                     `).join('')}
                 </div>
-                <div style="padding: 16px; border-top: 1px solid #e0e0e0; text-align: center;">
-                    <button onclick="navigator.clipboard.writeText(${JSON.stringify(dates.join('\\n'))})"
-                            style="background: #2196F3; color: white; border: none; border-radius: 6px; padding: 10px 20px; font-size: 14px; cursor: pointer; margin-right: 10px;">
-                        Copy Dates
-                    </button>
-                    <button onclick="this.closest('[style*=\"position: fixed\"]').remove()"
-                            style="background: #f5f5f5; color: #333; border: none; border-radius: 6px; padding: 10px 20px; font-size: 14px; cursor: pointer;">
-                        Close
-                    </button>
+                <div style="color: #666; font-size: 12px; margin-bottom: 15px;">
+                    ✅ Copied ${uniqueDates.length} dates to clipboard
                 </div>
+                <button onclick="this.parentElement.remove();" style="
+                    padding: 8px 16px;
+                    background: #666;
+                    color: white;
+                    border: none;
+                    border-radius: 4px;
+                    cursor: pointer;
+                ">
+                    Close
+                </button>
             </div>
         `;
         
-        document.body.appendChild(modal);
-    }
-    
-    getDates() {
-        return Array.from(this.extractedDates);
+        document.body.appendChild(results);
+        
+        return uniqueDates;
+        
+    } catch (error) {
+        console.error('Quick scan failed:', error);
+        alert('Make sure PDF is loaded!');
+        return [];
     }
 }
 
 // Initialize
-window.lmsExtractor = new EnhancedLMSExtractor();
+console.log('🌍 Universal Date Scanner loading...');
+setTimeout(() => {
+    window.universalDateScanner = new UniversalPDFDateScanner();
+    console.log('✅ Universal Date Scanner ready!');
+    console.log('📌 Press Ctrl+Shift+D to scan or click the blue button');
+    
+    // Expose quick function
+    window.quickUniversalScan = quickUniversalScan;
+    
+    // Auto-scan after 3 seconds
+    setTimeout(() => {
+        console.log('⏱️ Auto-scanning PDF...');
+        quickUniversalScan();
+    }, 3000);
+}, 1000);
